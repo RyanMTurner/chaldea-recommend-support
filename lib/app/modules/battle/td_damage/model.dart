@@ -47,6 +47,13 @@ class TdDmgResult {
   List<TdCeGain>? ceGains;
   List<String> ceErrors = [];
 
+  // Best MC ranking, lazily calculated on demand
+  int? mcBaseDamage;
+  int? mcBaseMcId; // MC from options at calculation time (the baseline)
+  int mcBaseLv = 0;
+  List<TdMcGain>? mcGains;
+  List<String> mcErrors = [];
+
   TdDmgResult(this.originalSvtData, this.battleData) : svt = originalSvtData.svt!;
 
   bool get hasInstantDeath {
@@ -66,6 +73,25 @@ class TdSupportGain {
   final int attackNp;
 
   TdSupportGain({required this.support, required this.damage, required this.gain, required this.attackNp});
+}
+
+/// Damage of an attacker when using mystic code [mc] (null = no MC) at the user's level.
+class TdMcGain {
+  final MysticCode? mc;
+  final int lv;
+  final bool isCurrent; // the MC selected in options at calculation time
+  final int damage;
+  final int gain;
+  final int attackNp;
+
+  TdMcGain({
+    required this.mc,
+    required this.lv,
+    required this.isCurrent,
+    required this.damage,
+    required this.gain,
+    required this.attackNp,
+  });
 }
 
 /// Damage of an attacker when equipped with [ce] (null = no CE) at the user's owned level/limit break.
@@ -397,6 +423,95 @@ class TdDmgSolver {
       ..ceBaseMLB = options.ceMLB
       ..ceGains = gains
       ..ceErrors = ceErrors;
+  }
+
+  /// Player's level of a mystic code: as recorded on the Mystic Code page, otherwise 10.
+  static int userMcLevel(MysticCode mc) => (db.curUser.mysticCodes[mc.id] ?? 10).clamp(1, 10);
+
+  /// Try every mystic code (at the user's level) in place of the MC set in options.
+  /// Gains are relative to the current options (selected MC, or no MC). Results are stored in [target.mcGains].
+  Future<void> calcBestMCs(TdDmgResult target) async {
+    if (running.value) return;
+    try {
+      running.value = true;
+      await _calcBestMCs(target);
+      await EasyLoading.dismiss();
+    } catch (e, s) {
+      tryEasyLoading(() => EasyLoading.showError(e.toString()));
+      logger.e('calc best MCs failed', e, s);
+    } finally {
+      running.value = false;
+    }
+  }
+
+  Future<void> _calcBestMCs(TdDmgResult target) async {
+    final quest = getQuest();
+    final delegate = getDelegate();
+
+    final currentMc = db.gameData.mysticCodes[options.mcId];
+    final baseline = await calcOneSvt(target.originalSvtData, quest, getMysticCodeData(), delegate);
+    final baseDamage = baseline?.totalDamage ?? target.totalDamage;
+
+    final List<TdMcGain> gains = [];
+    final List<String> mcErrors = [];
+
+    // with an MC selected, also show what removing it would do
+    if (currentMc != null) {
+      final result = await calcOneSvt(target.originalSvtData, quest, MysticCodeData()..mysticCode = null, delegate);
+      if (result != null) {
+        gains.add(
+          TdMcGain(
+            mc: null,
+            lv: 0,
+            isCurrent: false,
+            damage: result.totalDamage,
+            gain: result.totalDamage - baseDamage,
+            attackNp: result.attackNp,
+          ),
+        );
+      }
+    }
+
+    final mcs = db.gameData.mysticCodes.values.toList();
+    mcs.sort2((e) => e.id);
+    for (final (idx, mc) in mcs.indexed) {
+      if (idx % 5 == 0) {
+        EasyLoading.showProgress(
+          idx / max(1, mcs.length),
+          status: '$idx / ${mcs.length}',
+          maskType: EasyLoadingMaskType.clear,
+        );
+        await Future.delayed(const Duration(milliseconds: 5));
+      }
+      final lv = userMcLevel(mc);
+      try {
+        final mcData = MysticCodeData()
+          ..mysticCode = mc
+          ..level = lv;
+        final result = await calcOneSvt(target.originalSvtData, quest, mcData, delegate);
+        if (result == null) continue;
+        gains.add(
+          TdMcGain(
+            mc: mc,
+            lv: lv,
+            isCurrent: mc.id == currentMc?.id,
+            damage: result.totalDamage,
+            gain: result.totalDamage - baseDamage,
+            attackNp: result.attackNp,
+          ),
+        );
+      } catch (e, s) {
+        mcErrors.add('MC: ${mc.id} - ${mc.lName.l}\nError: $e');
+        logger.e('calc mc ${mc.id} error', e, s);
+      }
+    }
+    gains.sortByList((e) => [-e.damage, -e.attackNp, e.mc?.id ?? 0]);
+    target
+      ..mcBaseDamage = baseDamage
+      ..mcBaseMcId = currentMc?.id
+      ..mcBaseLv = options.mcLv
+      ..mcGains = gains
+      ..mcErrors = mcErrors;
   }
 
   final _debuffImmuneSkill = NiceSkill(
