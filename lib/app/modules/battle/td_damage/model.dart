@@ -726,7 +726,7 @@ class TdDmgSolver {
         limitCount: limitCount,
       );
     }
-    data.grandSvt = options.grandSvt;
+    data.grandSvt = options.grandSvt.isGrand(svt);
     if (data.grandSvt && !options.grandBoard.isNone) {
       if (options.equip2Type != BondEquipType.none) {
         // TODO_: Mash has two bond equips
@@ -745,7 +745,7 @@ class TdDmgSolver {
     if (baseBoard != null) {
       data.classBoardData.classBoardSquares = options.classBoard.getPlan(baseBoard).enhancedSquares.toList();
     }
-    final grandBoard = options.isUseGrandBoard ? ClassBoard.getGrandClassBoard(svt.classId) : null;
+    final grandBoard = data.grandSvt && !options.grandBoard.isNone ? ClassBoard.getGrandClassBoard(svt.classId) : null;
     if (grandBoard != null) {
       data.classBoardData.grandClassBoardSquares = options.grandBoard.getPlan(grandBoard).enhancedSquares.toList();
       data.classBoardData.classStatistics = [

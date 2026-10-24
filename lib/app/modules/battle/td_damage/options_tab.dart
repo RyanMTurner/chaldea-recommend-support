@@ -394,15 +394,27 @@ class _TdDmgOptionsTabState extends State<TdDmgOptionsTab> {
           },
         ),
       ),
-      CheckboxListTile(
+      ListTile(
         dense: true,
         title: Text(S.current.grand_servant),
-        value: options.grandSvt,
-        onChanged: (v) {
-          setState(() {
-            if (v != null) options.grandSvt = v;
-          });
-        },
+        subtitle: options.grandSvt == GrandSvtSource.current
+            ? const Text('Only servants marked as Grand in your servant data')
+            : null,
+        trailing: DropdownButton<GrandSvtSource>(
+          isDense: true,
+          value: options.grandSvt,
+          items: GrandSvtSource.values.map((source) {
+            return DropdownMenuItem(
+              value: source,
+              child: Text(source.shownName, textScaler: const TextScaler.linear(0.9)),
+            );
+          }).toList(),
+          onChanged: (v) {
+            setState(() {
+              if (v != null) options.grandSvt = v;
+            });
+          },
+        ),
       ),
       CheckboxListTile(
         dense: true,
@@ -418,7 +430,7 @@ class _TdDmgOptionsTabState extends State<TdDmgOptionsTab> {
       ListTile(
         dense: true,
         title: Text("Grand Board"),
-        enabled: options.grandSvt,
+        enabled: options.grandSvt != GrandSvtSource.disabled,
         trailing: DropdownButton<PreferClassBoardDataSource>(
           isDense: true,
           value: options.grandBoard,
@@ -428,7 +440,7 @@ class _TdDmgOptionsTabState extends State<TdDmgOptionsTab> {
               child: Text(source.shownName, textScaler: const TextScaler.linear(0.9)),
             );
           }).toList(),
-          onChanged: options.grandSvt
+          onChanged: options.grandSvt != GrandSvtSource.disabled
               ? (v) {
                   setState(() {
                     if (v != null) options.grandBoard = v;
