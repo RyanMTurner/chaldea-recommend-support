@@ -377,6 +377,13 @@ class TdDmgSolver {
       await _activateActiveSkills(battleData, 0);
     }
 
+    if (options.commandSpell) {
+      // Command Spell: Release NP on the attacker. Its NP gain is discarded below, but using a
+      // Command Spell triggers the class board's "Command Spell Excitation" (ATK up, 1 turn).
+      battleData.playerTargetIndex = 0;
+      await battleData.commandSpellReleaseNP();
+    }
+
     actor.np = ConstData.constants.fullTdPoint;
 
     final card = actor.getNPCard();

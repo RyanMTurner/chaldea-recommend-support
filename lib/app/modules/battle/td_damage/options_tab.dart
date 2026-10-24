@@ -404,6 +404,17 @@ class _TdDmgOptionsTabState extends State<TdDmgOptionsTab> {
           });
         },
       ),
+      CheckboxListTile(
+        dense: true,
+        title: Text(S.current.command_spell),
+        subtitle: const Text('Use a Command Spell on the attacker before NP (Class Score: Command Spell Excitation)'),
+        value: options.commandSpell,
+        onChanged: (v) {
+          setState(() {
+            if (v != null) options.commandSpell = v;
+          });
+        },
+      ),
       ListTile(
         dense: true,
         title: Text("Grand Board"),

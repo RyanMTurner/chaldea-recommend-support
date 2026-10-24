@@ -542,6 +542,7 @@ TdDamageOptions _$TdDamageOptionsFromJson(Map json) => $checkedCreate('TdDamageO
       (v) => $enumDecodeNullable(_$PreferClassBoardDataSourceEnumMap, v) ?? PreferClassBoardDataSource.none,
     ),
     grandSvt: $checkedConvert('grandSvt', (v) => v as bool? ?? false),
+    commandSpell: $checkedConvert('commandSpell', (v) => v as bool? ?? false),
     grandBoard: $checkedConvert(
       'grandBoard',
       (v) => $enumDecodeNullable(_$PreferClassBoardDataSourceEnumMap, v) ?? PreferClassBoardDataSource.none,
@@ -594,6 +595,7 @@ Map<String, dynamic> _$TdDamageOptionsToJson(TdDamageOptions instance) => <Strin
   'usePlayerSvt': _$PreferPlayerSvtDataSourceEnumMap[instance.usePlayerSvt]!,
   'classBoard': _$PreferClassBoardDataSourceEnumMap[instance.classBoard]!,
   'grandSvt': instance.grandSvt,
+  'commandSpell': instance.commandSpell,
   'grandBoard': _$PreferClassBoardDataSourceEnumMap[instance.grandBoard]!,
   'equip2Type': _$BondEquipTypeEnumMap[instance.equip2Type]!,
   'equip3': instance.equip3,
