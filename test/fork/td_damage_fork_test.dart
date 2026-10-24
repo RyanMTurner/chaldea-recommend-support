@@ -4,6 +4,7 @@
 //   3. Best MC list
 //   5. Command Spell calculator option
 //   8. Grand Servant option: Disabled / Current / Max
+//   9. "Battle Sim" button: send attacker + supports + MC to the Battle Simulation team
 //
 // Run: flutter test test/fork --dart-define=APP_PATH=/path/to/app/data
 import 'dart:convert';
@@ -11,6 +12,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:chaldea/app/modules/battle/td_damage/model.dart';
+import 'package:chaldea/app/modules/battle/td_damage/ranking_tab.dart' show buildBattleSimFormation;
 import 'package:chaldea/models/models.dart';
 
 import '../test_init.dart';
@@ -292,6 +294,53 @@ void main() async {
         );
         expect(roundTrip.grandSvt, source);
       }
+    });
+  });
+
+  group('Battle Sim button', () {
+    test('slot 1 = attacker with the calc CE, slots 2-6 = supports, MC from calc', () async {
+      final kaleido = db.gameData.craftEssencesById[kKaleidoscopeId]!;
+      options
+        ..ceId = kaleido.id
+        ..ceLv = 100
+        ..ceMLB = true
+        ..supports.addAll([kMerlin, kAltria])
+        ..mcId = 20
+        ..mcLv = 7;
+      final solver = TdDmgSolver();
+      final target = await calcAttacker(solver, kAltria);
+
+      final formation = buildBattleSimFormation(
+        solver,
+        target,
+        BattleTeamFormation()..mysticCode = MysticCodeSaveData(mysticCodeId: 130, level: 10),
+      );
+      expect(formation.svts, hasLength(6));
+      expect(formation.svts[0]?.svtId, kAltria);
+      expect(formation.svts[0]?.equip1.id, kaleido.id);
+      expect(formation.svts[0]?.equip1.lv, 100);
+      expect(formation.svts[0]?.equip1.limitBreak, isTrue);
+      expect(formation.svts[0]?.customPassives, isEmpty, reason: 'calc buffs are not copied');
+      expect(formation.svts[1]?.svtId, kMerlin);
+      expect(formation.svts[2]?.svtId, kAltria);
+      expect(formation.svts.skip(3).every((e) => e == null), isTrue, reason: 'previous team is cleared');
+      expect(formation.mysticCode.mysticCodeId, 20);
+      expect(formation.mysticCode.level, 7);
+    });
+
+    test('no MC in the calc keeps the team MC', () async {
+      options.mcId = null;
+      final solver = TdDmgSolver();
+      final target = await calcAttacker(solver, kAltria);
+      final formation = buildBattleSimFormation(
+        solver,
+        target,
+        BattleTeamFormation()..mysticCode = MysticCodeSaveData(mysticCodeId: 130, level: 9),
+      );
+      expect(formation.svts[0]?.svtId, kAltria);
+      expect(formation.svts.skip(1).every((e) => e == null), isTrue);
+      expect(formation.mysticCode.mysticCodeId, 130);
+      expect(formation.mysticCode.level, 9);
     });
   });
 }

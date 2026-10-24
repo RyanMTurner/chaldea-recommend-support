@@ -96,6 +96,9 @@ class _SimulationPreviewState extends State<SimulationPreview> {
       questIdTextController.text = settings.previousQuestPhase!;
       _parseQuestPhase();
       initFormation();
+    } else {
+      // no quest yet, still restore the saved team (e.g. sent from Laplace NP Damage)
+      initFormation();
     }
   }
 

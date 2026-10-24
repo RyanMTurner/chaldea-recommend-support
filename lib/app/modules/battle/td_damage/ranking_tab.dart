@@ -16,6 +16,7 @@ import '../../mystic_code/filter.dart';
 import '../../servant/filter.dart';
 import '../simulation/battle_log.dart';
 import '../simulation/recorder.dart';
+import '../simulation_preview.dart';
 import 'model.dart';
 
 class TdDmgRankingTab extends StatefulWidget {
@@ -363,11 +364,22 @@ class _ResultDetailState extends State<_ResultDetail> {
       );
     }
     children.add(
-      TextButton(
-        onPressed: () {
-          router.pushPage(_BattleLogDetails(title: widget.result.svt.lName.l, battleData: widget.result.battleData));
-        },
-        child: Text(S.current.details),
+      Wrap(
+        alignment: WrapAlignment.center,
+        children: [
+          TextButton(
+            onPressed: () {
+              router.pushPage(
+                _BattleLogDetails(title: widget.result.svt.lName.l, battleData: widget.result.battleData),
+              );
+            },
+            child: Text(S.current.details),
+          ),
+          TextButton(
+            onPressed: () => openInBattleSim(widget.solver, widget.result),
+            child: const Text('Battle Sim'),
+          ),
+        ],
       ),
     );
     return Column(mainAxisSize: MainAxisSize.min, children: children);
@@ -990,6 +1002,47 @@ class _BestMcViewState extends State<_BestMcView> {
       child: Column(mainAxisSize: MainAxisSize.min, children: children),
     );
   }
+}
+
+/// Replace the Battle Simulation team with: slot 1 = this attacker (with the calc's CE and settings),
+/// slots 2-6 = the calc's supports. The calc's mystic code replaces the team's only if one is set.
+@visibleForTesting
+BattleTeamFormation buildBattleSimFormation(TdDmgSolver solver, TdDmgResult result, BattleTeamFormation current) {
+  final options = solver.options;
+  final region = db.settings.battleSim.playerRegion;
+
+  final attacker = result.originalSvtData.copy();
+  // the calc's "Buffs" section is added as custom passives, it isn't part of the servant
+  attacker.customPassives.clear();
+  attacker.customPassiveLvs.clear();
+  if (!options.enableActiveSkills) {
+    attacker.updateRankUps(region: options.region); // calc removed skills, restore them
+  }
+
+  final List<PlayerSvtData> svts = [attacker];
+  for (final svtId in options.supports) {
+    if (svts.length >= 6) break;
+    final svt = db.gameData.servantsById[svtId];
+    if (svt == null) continue;
+    svts.add(PlayerSvtData.base()..onSelectServant(svt, region: region));
+  }
+
+  final formation = current
+    ..svts = [
+      for (int index = 0; index < 6; index++) svts.getOrNull(index)?.toStoredData(),
+    ];
+  final mc = db.gameData.mysticCodes[options.mcId];
+  if (mc != null) {
+    formation.mysticCode = MysticCodeSaveData(mysticCodeId: mc.id, level: options.mcLv);
+  }
+  return formation;
+}
+
+void openInBattleSim(TdDmgSolver solver, TdDmgResult result) {
+  final team = db.settings.battleSim.curTeam;
+  buildBattleSimFormation(solver, result, team.formation);
+  db.notifySettings();
+  router.pushPage(const SimulationPreview());
 }
 
 class _BattleLogDetails extends StatelessWidget {
