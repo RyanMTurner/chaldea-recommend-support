@@ -25,6 +25,7 @@ import 'package:chaldea/widgets/widgets.dart';
 
 import '../../quest/quest_card.dart';
 import '../formation/formation_card.dart';
+import 'fga_export.dart';
 import 'svt_detail.dart';
 
 class BattleRecorderPanel extends StatefulWidget {
@@ -215,6 +216,19 @@ class _BattleRecorderPanelState extends State<BattleRecorderPanel> {
               },
               padding: const EdgeInsets.symmetric(vertical: 16.0, horizontal: 24.0),
               child: Text(S.current.recorder_screenshot_current_view),
+            ),
+            SimpleDialogOption(
+              onPressed: () {
+                Navigator.pop(context);
+                final records = widget.records ?? widget.battleData?.recorder.records ?? [];
+                showDialog(
+                  context: this.context,
+                  useRootNavigator: false,
+                  builder: (context) => FgaCommandDialog(records: records.toList()),
+                );
+              },
+              padding: const EdgeInsets.symmetric(vertical: 16.0, horizontal: 24.0),
+              child: const Text('Export FGA Command'),
             ),
             kIndentDivider,
             StatefulBuilder(
