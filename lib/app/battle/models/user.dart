@@ -101,6 +101,14 @@ class PlayerSvtData {
     if (selectedSvt.classId != svt?.classId) {
       classBoardData = ClassBoardStatisticsData();
     }
+    // default Class Score to the user's current progress for the new servant's class
+    final classBoard = ClassBoard.getClassBoard(selectedSvt.classId);
+    if (classBoard != null) {
+      classBoardData.classBoardSquares = PreferClassBoardDataSource.current
+          .getPlan(classBoard)
+          .enhancedSquares
+          .toList();
+    }
     svt = selectedSvt;
     transformSvt = null;
     transformVal = false;
