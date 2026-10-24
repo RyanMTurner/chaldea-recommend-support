@@ -9,6 +9,7 @@ import 'package:chaldea/models/models.dart';
 import 'package:chaldea/utils/utils.dart';
 import 'package:chaldea/widgets/widgets.dart';
 
+import '../../craft_essence/filter.dart';
 import '../../servant/filter.dart';
 import '../simulation/battle_log.dart';
 import '../simulation/recorder.dart';
@@ -28,6 +29,8 @@ class _TdDmgRankingTabState extends State<TdDmgRankingTab> {
   _SortType _sortType = _SortType.damage;
   // filter for the Best Supports lists, independent of the damage dealer filter
   final supportFilterData = SvtFilterData();
+  // filter for the Best CE lists
+  final ceFilterData = CraftFilterData();
 
   final scrollController = ScrollController();
 
@@ -142,6 +145,7 @@ class _TdDmgRankingTabState extends State<TdDmgRankingTab> {
             key: Key('ResultDetail_${index}_${_sortType}_${result.svt.id}'),
             solver: widget.solver,
             supportFilterData: supportFilterData,
+            ceFilterData: ceFilterData,
             result: result,
             tab: result.hasInstantDeathSuccess
                 ? _ParamType.instantDeath
@@ -211,12 +215,14 @@ class _TdDmgRankingTabState extends State<TdDmgRankingTab> {
 class _ResultDetail extends StatefulWidget {
   final TdDmgSolver solver;
   final SvtFilterData supportFilterData;
+  final CraftFilterData ceFilterData;
   final TdDmgResult result;
   final _ParamType? tab;
   const _ResultDetail({
     super.key,
     required this.solver,
     required this.supportFilterData,
+    required this.ceFilterData,
     required this.result,
     this.tab,
   });
@@ -261,7 +267,12 @@ class _ResultDetailState extends State<_ResultDetail> {
     }
     if (tab == _ParamType.bestCE) {
       children.add(
-        _BestCeView(key: Key('BestCE_${widget.result.hashCode}'), solver: widget.solver, result: widget.result),
+        _BestCeView(
+          key: Key('BestCE_${widget.result.hashCode}'),
+          solver: widget.solver,
+          filterData: widget.ceFilterData,
+          result: widget.result,
+        ),
       );
       return Column(mainAxisSize: MainAxisSize.min, children: children);
     }
@@ -484,8 +495,9 @@ class _BestSupportsViewState extends State<_BestSupportsView> {
 
 class _BestCeView extends StatefulWidget {
   final TdDmgSolver solver;
+  final CraftFilterData filterData;
   final TdDmgResult result;
-  const _BestCeView({super.key, required this.solver, required this.result});
+  const _BestCeView({super.key, required this.solver, required this.filterData, required this.result});
 
   @override
   State<_BestCeView> createState() => _BestCeViewState();
@@ -513,6 +525,18 @@ class _BestCeViewState extends State<_BestCeView> {
 
   String _fmt(int v) => v.format(groupSeparator: ",", compact: false);
 
+  void _showFilter() {
+    FilterPage.show(
+      context: context,
+      builder: (context) => CraftFilterPage(
+        filterData: widget.filterData,
+        onChanged: (_) {
+          if (mounted) setState(() {});
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final gains = widget.result.ceGains;
@@ -529,20 +553,36 @@ class _BestCeViewState extends State<_BestCeView> {
     final options = widget.solver.options;
     final currentCe = db.gameData.craftEssencesById[options.ceId];
     final baseDamage = widget.result.ceBaseDamage ?? widget.result.totalDamage;
-    final shown = _showAll ? gains : gains.take(_kCollapsedCount).toList();
+    final filterData = widget.filterData;
+    final filterActive = filterData.groups.any((g) => !g.isEmpty);
+    // "No CE" row is always kept
+    final filtered = gains.where((e) => e.ce == null || CraftFilterPage.filter(filterData, e.ce!)).toList();
+    final shown = _showAll ? filtered : filtered.take(_kCollapsedCount).toList();
     final ownedCount = gains.where((e) => e.ce != null).length;
+    final filteredCount = filtered.where((e) => e.ce != null).length;
 
     List<Widget> children = [
       ListTile(
         dense: true,
         title: Text('Baseline ${S.current.damage}: ${_fmt(baseDamage)}'),
         subtitle: Text(
-          currentCe == null
-              ? 'No CE selected. Each owned CE ($ownedCount) equipped at your level and limit break.'
-              : 'Current CE: ${currentCe.lName.l} (Lv.${options.ceLv}${options.ceMLB ? ' MLB' : ''}). '
-                    'Numbers show replacing it with each owned CE ($ownedCount) at your level and limit break.',
+          (currentCe == null
+                  ? 'No CE selected. Each owned CE ($ownedCount) equipped at your level and limit break.'
+                  : 'Current CE: ${currentCe.lName.l} (Lv.${options.ceLv}${options.ceMLB ? ' MLB' : ''}). '
+                        'Numbers show replacing it with each owned CE ($ownedCount) at your level and limit break.') +
+              (filterActive ? '\nFiltered: $filteredCount / $ownedCount CEs shown.' : ''),
         ),
-        trailing: IconButton(tooltip: 'Recalculate', onPressed: _calculate, icon: const Icon(Icons.refresh)),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              tooltip: S.current.filter,
+              onPressed: _showFilter,
+              icon: Icon(Icons.filter_alt, color: filterActive ? theme.colorScheme.primary : null),
+            ),
+            IconButton(tooltip: 'Recalculate', onPressed: _calculate, icon: const Icon(Icons.refresh)),
+          ],
+        ),
       ),
     ];
     if (ownedCount == 0) {
@@ -552,6 +592,8 @@ class _BestCeViewState extends State<_BestCeView> {
           child: Text('No owned craft essences. Mark CEs as owned (with level and limit break) in the CE pages.'),
         ),
       );
+    } else if (filteredCount == 0) {
+      children.add(const Padding(padding: EdgeInsets.all(8), child: Text('No owned CE matches the filter.')));
     }
     for (final (index, gain) in shown.indexed) {
       final ce = gain.ce;
@@ -595,11 +637,11 @@ class _BestCeViewState extends State<_BestCeView> {
         ),
       );
     }
-    if (gains.length > _kCollapsedCount) {
+    if (filtered.length > _kCollapsedCount) {
       children.add(
         TextButton(
           onPressed: () => setState(() => _showAll = !_showAll),
-          child: Text(_showAll ? 'Show top $_kCollapsedCount' : 'Show all (${gains.length})'),
+          child: Text(_showAll ? 'Show top $_kCollapsedCount' : 'Show all (${filtered.length})'),
         ),
       );
     }
