@@ -284,6 +284,17 @@ class _ResultDetailState extends State<_ResultDetail> {
       );
       return Column(mainAxisSize: MainAxisSize.min, children: children);
     }
+    if (tab == _ParamType.bestMC) {
+      children.add(
+        _BestMcView(
+          key: Key('BestMC_${widget.result.hashCode}'),
+          solver: widget.solver,
+          onOptionsChanged: widget.onOptionsChanged,
+          result: widget.result,
+        ),
+      );
+      return Column(mainAxisSize: MainAxisSize.min, children: children);
+    }
 
     for (final attack in widget.result.attacks) {
       Widget? paramsCard;
@@ -324,6 +335,7 @@ class _ResultDetailState extends State<_ResultDetail> {
           case _ParamType.instantDeath:
           case _ParamType.bestSupports:
           case _ParamType.bestCE:
+          case _ParamType.bestMC:
             break;
         }
       } else if (attack is BattleInstantDeathRecord) {
@@ -768,6 +780,173 @@ class _BestCeViewState extends State<_BestCeView> {
   }
 }
 
+class _BestMcView extends StatefulWidget {
+  final TdDmgSolver solver;
+  final VoidCallback? onOptionsChanged;
+  final TdDmgResult result;
+  const _BestMcView({super.key, required this.solver, this.onOptionsChanged, required this.result});
+
+  @override
+  State<_BestMcView> createState() => _BestMcViewState();
+}
+
+class _BestMcViewState extends State<_BestMcView> {
+  static const _kCollapsedCount = 20;
+  bool _showAll = false;
+  bool _calculating = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.result.mcGains == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _calculate());
+    }
+  }
+
+  Future<void> _calculate() async {
+    if (_calculating || widget.solver.running.value) return;
+    setState(() => _calculating = true);
+    await widget.solver.calcBestMCs(widget.result);
+    if (mounted) setState(() => _calculating = false);
+  }
+
+  String _fmt(int v) => v.format(groupSeparator: ",", compact: false);
+
+  bool _isSelectedInOptions(TdMcGain gain) {
+    final options = widget.solver.options;
+    if (gain.mc == null) return db.gameData.mysticCodes[options.mcId] == null;
+    return options.mcId == gain.mc!.id && options.mcLv == gain.lv;
+  }
+
+  void _applyMc(TdMcGain gain) {
+    final options = widget.solver.options;
+    final mc = gain.mc;
+    if (mc == null) {
+      options.mcId = null;
+    } else {
+      options
+        ..mcId = mc.id
+        ..mcLv = gain.lv;
+    }
+    setState(() {});
+    widget.onOptionsChanged?.call();
+    EasyLoading.showToast(
+      '${S.current.mystic_code}: ${mc == null ? 'None' : '${mc.lName.l} Lv.${gain.lv}'}'
+      '\nPress ${S.current.calculate} to update the rankings.',
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final gains = widget.result.mcGains;
+    if (_calculating) {
+      return const Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator());
+    }
+    if (gains == null) {
+      return Padding(
+        padding: const EdgeInsets.all(8),
+        child: FilledButton(onPressed: _calculate, child: const Text('Calculate Best MC')),
+      );
+    }
+    final theme = Theme.of(context);
+    final result = widget.result;
+    final currentMc = db.gameData.mysticCodes[result.mcBaseMcId];
+    final baseDamage = result.mcBaseDamage ?? result.totalDamage;
+    final shown = _showAll ? gains : gains.take(_kCollapsedCount).toList();
+    final mcCount = gains.where((e) => e.mc != null).length;
+
+    List<Widget> children = [
+      ListTile(
+        dense: true,
+        title: Text('Baseline ${S.current.damage}: ${_fmt(baseDamage)}'),
+        subtitle: Text(
+          currentMc == null
+              ? 'No Mystic Code selected. Each Mystic Code ($mcCount) used at your level (Lv.10 if not recorded).'
+              : 'Current: ${currentMc.lName.l} (Lv.${result.mcBaseLv}). Numbers show replacing it with each '
+                    'Mystic Code ($mcCount) at your level (Lv.10 if not recorded).',
+        ),
+        trailing: IconButton(tooltip: 'Recalculate', onPressed: _calculate, icon: const Icon(Icons.refresh)),
+      ),
+    ];
+    for (final (index, gain) in shown.indexed) {
+      final mc = gain.mc;
+      final percent = baseDamage > 0 ? gain.gain / baseDamage * 100 : 0.0;
+      final sign = gain.gain >= 0 ? '+' : '';
+      final color = gain.gain > 0
+          ? theme.colorScheme.primary
+          : gain.gain < 0
+          ? theme.colorScheme.error
+          : theme.disabledColor;
+      final selected = _isSelectedInOptions(gain);
+      children.add(
+        ListTile(
+          dense: true,
+          selected: gain.isCurrent,
+          contentPadding: const EdgeInsetsDirectional.only(start: 12, end: 4),
+          leading: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('${(index + 1).toString().padRight(2)} ', style: kMonoStyle, textScaler: const TextScaler.linear(0.8)),
+              mc == null
+                  ? const SizedBox(width: 32, height: 32, child: Icon(Icons.block))
+                  : mc.iconBuilder(context: context, width: 32),
+            ],
+          ),
+          title: Text(
+            mc == null ? 'No Mystic Code' : mc.lName.l + (gain.isCurrent ? ' (current)' : ''),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          subtitle: Text(
+            [if (mc != null) 'Lv.${gain.lv}', '${S.current.damage} ${_fmt(gain.damage)}'].join('  '),
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '$sign${_fmt(gain.gain)}\n$sign${percent.toStringAsFixed(1)}%',
+                textAlign: TextAlign.end,
+                style: theme.textTheme.bodySmall?.copyWith(color: color),
+              ),
+              IconButton(
+                tooltip: selected ? 'Selected in options' : 'Use this Mystic Code',
+                onPressed: selected ? null : () => _applyMc(gain),
+                icon: Icon(selected ? Icons.check_circle : Icons.add_circle_outline),
+                color: theme.colorScheme.primary,
+                visualDensity: VisualDensity.compact,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    if (gains.length > _kCollapsedCount) {
+      children.add(
+        TextButton(
+          onPressed: () => setState(() => _showAll = !_showAll),
+          child: Text(_showAll ? 'Show top $_kCollapsedCount' : 'Show all (${gains.length})'),
+        ),
+      );
+    }
+    final errors = result.mcErrors;
+    if (errors.isNotEmpty) {
+      children.add(
+        SimpleAccordion(
+          headerBuilder: (context, _) => ListTile(
+            dense: true,
+            title: Text('${errors.length} ${S.current.error}', style: TextStyle(color: theme.colorScheme.error)),
+          ),
+          contentBuilder: (context) => Padding(padding: const EdgeInsets.all(8), child: Text(errors.join('\n\n'))),
+        ),
+      );
+    }
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: Column(mainAxisSize: MainAxisSize.min, children: children),
+    );
+  }
+}
+
 class _BattleLogDetails extends StatelessWidget {
   final String title;
   final BattleData battleData;
@@ -820,6 +999,7 @@ enum _ParamType {
   star,
   bestSupports,
   bestCE,
+  bestMC,
   instantDeath;
 
   String get shownName {
@@ -834,6 +1014,8 @@ enum _ParamType {
         return 'Best Supports';
       case _ParamType.bestCE:
         return 'Best CE';
+      case _ParamType.bestMC:
+        return 'Best MC';
       case _ParamType.instantDeath:
         return S.current.instant_death;
     }
