@@ -1,3 +1,5 @@
+import 'package:flutter_easyloading/flutter_easyloading.dart';
+
 import 'package:chaldea/app/app.dart';
 import 'package:chaldea/app/battle/models/battle.dart';
 import 'package:chaldea/app/battle/utils/battle_logger.dart';
@@ -18,8 +20,9 @@ import 'model.dart';
 class TdDmgRankingTab extends StatefulWidget {
   final TdDmgSolver solver;
   final SvtFilterData svtFilterData;
+  final VoidCallback? onOptionsChanged; // e.g. CE applied from Best CE, to refresh the options tab
 
-  const TdDmgRankingTab({super.key, required this.solver, required this.svtFilterData});
+  const TdDmgRankingTab({super.key, required this.solver, required this.svtFilterData, this.onOptionsChanged});
 
   @override
   State<TdDmgRankingTab> createState() => _TdDmgRankingTabState();
@@ -146,6 +149,7 @@ class _TdDmgRankingTabState extends State<TdDmgRankingTab> {
             solver: widget.solver,
             supportFilterData: supportFilterData,
             ceFilterData: ceFilterData,
+            onOptionsChanged: widget.onOptionsChanged,
             result: result,
             tab: result.hasInstantDeathSuccess
                 ? _ParamType.instantDeath
@@ -216,6 +220,7 @@ class _ResultDetail extends StatefulWidget {
   final TdDmgSolver solver;
   final SvtFilterData supportFilterData;
   final CraftFilterData ceFilterData;
+  final VoidCallback? onOptionsChanged;
   final TdDmgResult result;
   final _ParamType? tab;
   const _ResultDetail({
@@ -223,6 +228,7 @@ class _ResultDetail extends StatefulWidget {
     required this.solver,
     required this.supportFilterData,
     required this.ceFilterData,
+    this.onOptionsChanged,
     required this.result,
     this.tab,
   });
@@ -271,6 +277,7 @@ class _ResultDetailState extends State<_ResultDetail> {
           key: Key('BestCE_${widget.result.hashCode}'),
           solver: widget.solver,
           filterData: widget.ceFilterData,
+          onOptionsChanged: widget.onOptionsChanged,
           result: widget.result,
         ),
       );
@@ -496,8 +503,15 @@ class _BestSupportsViewState extends State<_BestSupportsView> {
 class _BestCeView extends StatefulWidget {
   final TdDmgSolver solver;
   final CraftFilterData filterData;
+  final VoidCallback? onOptionsChanged;
   final TdDmgResult result;
-  const _BestCeView({super.key, required this.solver, required this.filterData, required this.result});
+  const _BestCeView({
+    super.key,
+    required this.solver,
+    required this.filterData,
+    this.onOptionsChanged,
+    required this.result,
+  });
 
   @override
   State<_BestCeView> createState() => _BestCeViewState();
@@ -525,6 +539,31 @@ class _BestCeViewState extends State<_BestCeView> {
 
   String _fmt(int v) => v.format(groupSeparator: ",", compact: false);
 
+  bool _isSelectedInOptions(TdCeGain gain) {
+    final options = widget.solver.options;
+    if (gain.ce == null) return options.ceId == null || db.gameData.craftEssencesById[options.ceId] == null;
+    return options.ceId == gain.ce!.id && options.ceLv == gain.lv && options.ceMLB == gain.limitBreak;
+  }
+
+  void _applyCe(TdCeGain gain) {
+    final options = widget.solver.options;
+    final ce = gain.ce;
+    if (ce == null) {
+      options.ceId = null;
+    } else {
+      options
+        ..ceId = ce.id
+        ..ceLv = gain.lv.clamp(0, ce.lvMax)
+        ..ceMLB = gain.limitBreak;
+    }
+    setState(() {});
+    widget.onOptionsChanged?.call();
+    EasyLoading.showToast(
+      '${S.current.craft_essence}: ${ce == null ? 'None' : '${ce.lName.l} Lv.${gain.lv}${gain.limitBreak ? ' MLB' : ''}'}'
+      '\nPress ${S.current.calculate} to update the rankings.',
+    );
+  }
+
   void _showFilter() {
     FilterPage.show(
       context: context,
@@ -550,9 +589,9 @@ class _BestCeViewState extends State<_BestCeView> {
       );
     }
     final theme = Theme.of(context);
-    final options = widget.solver.options;
-    final currentCe = db.gameData.craftEssencesById[options.ceId];
-    final baseDamage = widget.result.ceBaseDamage ?? widget.result.totalDamage;
+    final result = widget.result;
+    final currentCe = db.gameData.craftEssencesById[result.ceBaseCeId];
+    final baseDamage = result.ceBaseDamage ?? result.totalDamage;
     final filterData = widget.filterData;
     final filterActive = filterData.groups.any((g) => !g.isEmpty);
     // "No CE" row is always kept
@@ -568,7 +607,7 @@ class _BestCeViewState extends State<_BestCeView> {
         subtitle: Text(
           (currentCe == null
                   ? 'No CE selected. Each owned CE ($ownedCount) equipped at your level and limit break.'
-                  : 'Current CE: ${currentCe.lName.l} (Lv.${options.ceLv}${options.ceMLB ? ' MLB' : ''}). '
+                  : 'Current CE: ${currentCe.lName.l} (Lv.${result.ceBaseLv}${result.ceBaseMLB ? ' MLB' : ''}). '
                         'Numbers show replacing it with each owned CE ($ownedCount) at your level and limit break.') +
               (filterActive ? '\nFiltered: $filteredCount / $ownedCount CEs shown.' : ''),
         ),
@@ -629,10 +668,27 @@ class _BestCeViewState extends State<_BestCeView> {
               '${S.current.damage} ${_fmt(gain.damage)}',
             ].join('  '),
           ),
-          trailing: Text(
-            '$sign${_fmt(gain.gain)}\n$sign${percent.toStringAsFixed(1)}%',
-            textAlign: TextAlign.end,
-            style: theme.textTheme.bodySmall?.copyWith(color: color),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '$sign${_fmt(gain.gain)}\n$sign${percent.toStringAsFixed(1)}%',
+                textAlign: TextAlign.end,
+                style: theme.textTheme.bodySmall?.copyWith(color: color),
+              ),
+              Builder(
+                builder: (context) {
+                  final selected = _isSelectedInOptions(gain);
+                  return IconButton(
+                    tooltip: selected ? 'Selected in options' : 'Use this CE',
+                    onPressed: selected ? null : () => _applyCe(gain),
+                    icon: Icon(selected ? Icons.check_circle : Icons.add_circle_outline),
+                    color: theme.colorScheme.primary,
+                    visualDensity: VisualDensity.compact,
+                  );
+                },
+              ),
+            ],
           ),
         ),
       );

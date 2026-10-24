@@ -40,6 +40,10 @@ class TdDmgResult {
 
   // Best CE ranking, lazily calculated on demand
   int? ceBaseDamage;
+  // CE from options at the time Best CE was calculated (the baseline)
+  int? ceBaseCeId;
+  int ceBaseLv = 0;
+  bool ceBaseMLB = false;
   List<TdCeGain>? ceGains;
   List<String> ceErrors = [];
 
@@ -388,6 +392,9 @@ class TdDmgSolver {
     gains.sortByList((e) => [-e.damage, -e.attackNp, e.ce?.collectionNo ?? 0]);
     target
       ..ceBaseDamage = baseDamage
+      ..ceBaseCeId = currentCe?.id
+      ..ceBaseLv = options.ceLv
+      ..ceBaseMLB = options.ceMLB
       ..ceGains = gains
       ..ceErrors = ceErrors;
   }

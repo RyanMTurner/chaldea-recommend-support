@@ -57,7 +57,13 @@ class _TdDamageRankingState extends State<TdDamageRanking> with SingleTickerProv
               }
             },
           ),
-          TdDmgRankingTab(solver: solver, svtFilterData: svtFilterData),
+          TdDmgRankingTab(
+            solver: solver,
+            svtFilterData: svtFilterData,
+            onOptionsChanged: () {
+              if (mounted) setState(() {});
+            },
+          ),
         ];
 
         final useTabView = constraints.maxWidth < 600;
