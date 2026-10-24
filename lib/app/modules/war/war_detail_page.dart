@@ -581,7 +581,7 @@ Widget addQuestCategoryTile({
 
   List<Widget> children = [];
 
-  void _addTile(String name, List<Quest> quests, {bool needSort = true}) {
+  void _addTile(String name, List<Quest> quests, {bool needSort = true, bool showBondEfficiency = false}) {
     if (quests.isEmpty) return;
     children.add(
       ListTile(
@@ -589,7 +589,13 @@ Widget addQuestCategoryTile({
         trailing: Icon(DirectionalIcons.keyboard_arrow_forward(context)),
         onTap: () {
           router.push(
-            child: QuestListPage(title: name, quests: quests, needSort: needSort, war: war),
+            child: QuestListPage(
+              title: name,
+              quests: quests,
+              needSort: needSort,
+              war: war,
+              showBondEfficiency: showBondEfficiency,
+            ),
           );
         },
       ),
@@ -608,7 +614,7 @@ Widget addQuestCategoryTile({
   } else {
     needSortFree = true;
   }
-  _addTile(S.current.free_quest, freeQuests, needSort: needSortFree);
+  _addTile(S.current.free_quest, freeQuests, needSort: needSortFree, showBondEfficiency: true);
 
   _addTile(S.current.daily_ember_quest, dailyEmber);
   _addTile(S.current.daily_training_quest, dailyTraining);
