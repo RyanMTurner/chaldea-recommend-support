@@ -259,6 +259,12 @@ class _ResultDetailState extends State<_ResultDetail> {
       );
       return Column(mainAxisSize: MainAxisSize.min, children: children);
     }
+    if (tab == _ParamType.bestCE) {
+      children.add(
+        _BestCeView(key: Key('BestCE_${widget.result.hashCode}'), solver: widget.solver, result: widget.result),
+      );
+      return Column(mainAxisSize: MainAxisSize.min, children: children);
+    }
 
     for (final attack in widget.result.attacks) {
       Widget? paramsCard;
@@ -298,6 +304,7 @@ class _ResultDetailState extends State<_ResultDetail> {
             break;
           case _ParamType.instantDeath:
           case _ParamType.bestSupports:
+          case _ParamType.bestCE:
             break;
         }
       } else if (attack is BattleInstantDeathRecord) {
@@ -475,6 +482,146 @@ class _BestSupportsViewState extends State<_BestSupportsView> {
   }
 }
 
+class _BestCeView extends StatefulWidget {
+  final TdDmgSolver solver;
+  final TdDmgResult result;
+  const _BestCeView({super.key, required this.solver, required this.result});
+
+  @override
+  State<_BestCeView> createState() => _BestCeViewState();
+}
+
+class _BestCeViewState extends State<_BestCeView> {
+  static const _kCollapsedCount = 20;
+  bool _showAll = false;
+  bool _calculating = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.result.ceGains == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _calculate());
+    }
+  }
+
+  Future<void> _calculate() async {
+    if (_calculating || widget.solver.running.value) return;
+    setState(() => _calculating = true);
+    await widget.solver.calcBestCEs(widget.result);
+    if (mounted) setState(() => _calculating = false);
+  }
+
+  String _fmt(int v) => v.format(groupSeparator: ",", compact: false);
+
+  @override
+  Widget build(BuildContext context) {
+    final gains = widget.result.ceGains;
+    if (_calculating) {
+      return const Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator());
+    }
+    if (gains == null) {
+      return Padding(
+        padding: const EdgeInsets.all(8),
+        child: FilledButton(onPressed: _calculate, child: const Text('Calculate Best CE')),
+      );
+    }
+    final theme = Theme.of(context);
+    final options = widget.solver.options;
+    final currentCe = db.gameData.craftEssencesById[options.ceId];
+    final baseDamage = widget.result.ceBaseDamage ?? widget.result.totalDamage;
+    final shown = _showAll ? gains : gains.take(_kCollapsedCount).toList();
+    final ownedCount = gains.where((e) => e.ce != null).length;
+
+    List<Widget> children = [
+      ListTile(
+        dense: true,
+        title: Text('Baseline ${S.current.damage}: ${_fmt(baseDamage)}'),
+        subtitle: Text(
+          currentCe == null
+              ? 'No CE selected. Each owned CE ($ownedCount) equipped at your level and limit break.'
+              : 'Current CE: ${currentCe.lName.l} (Lv.${options.ceLv}${options.ceMLB ? ' MLB' : ''}). '
+                    'Numbers show replacing it with each owned CE ($ownedCount) at your level and limit break.',
+        ),
+        trailing: IconButton(tooltip: 'Recalculate', onPressed: _calculate, icon: const Icon(Icons.refresh)),
+      ),
+    ];
+    if (ownedCount == 0) {
+      children.add(
+        const Padding(
+          padding: EdgeInsets.all(8),
+          child: Text('No owned craft essences. Mark CEs as owned (with level and limit break) in the CE pages.'),
+        ),
+      );
+    }
+    for (final (index, gain) in shown.indexed) {
+      final ce = gain.ce;
+      final percent = baseDamage > 0 ? gain.gain / baseDamage * 100 : 0.0;
+      final sign = gain.gain >= 0 ? '+' : '';
+      final color = gain.gain > 0
+          ? theme.colorScheme.primary
+          : gain.gain < 0
+          ? theme.colorScheme.error
+          : theme.disabledColor;
+      children.add(
+        ListTile(
+          dense: true,
+          selected: gain.isCurrent,
+          contentPadding: const EdgeInsetsDirectional.only(start: 12, end: 12),
+          leading: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('${(index + 1).toString().padRight(2)} ', style: kMonoStyle, textScaler: const TextScaler.linear(0.8)),
+              ce == null
+                  ? const SizedBox(width: 32, height: 32, child: Icon(Icons.block))
+                  : ce.iconBuilder(context: context, width: 32),
+            ],
+          ),
+          title: Text(
+            ce == null ? 'No CE' : ce.lName.l + (gain.isCurrent ? ' (current)' : ''),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          subtitle: Text(
+            [
+              if (ce != null) 'Lv.${gain.lv}${gain.limitBreak ? ' MLB' : ''}',
+              '${S.current.damage} ${_fmt(gain.damage)}',
+            ].join('  '),
+          ),
+          trailing: Text(
+            '$sign${_fmt(gain.gain)}\n$sign${percent.toStringAsFixed(1)}%',
+            textAlign: TextAlign.end,
+            style: theme.textTheme.bodySmall?.copyWith(color: color),
+          ),
+        ),
+      );
+    }
+    if (gains.length > _kCollapsedCount) {
+      children.add(
+        TextButton(
+          onPressed: () => setState(() => _showAll = !_showAll),
+          child: Text(_showAll ? 'Show top $_kCollapsedCount' : 'Show all (${gains.length})'),
+        ),
+      );
+    }
+    final errors = widget.result.ceErrors;
+    if (errors.isNotEmpty) {
+      children.add(
+        SimpleAccordion(
+          headerBuilder: (context, _) => ListTile(
+            dense: true,
+            title: Text('${errors.length} ${S.current.error}', style: TextStyle(color: theme.colorScheme.error)),
+          ),
+          contentBuilder: (context) => Padding(padding: const EdgeInsets.all(8), child: Text(errors.join('\n\n'))),
+        ),
+      );
+    }
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: Column(mainAxisSize: MainAxisSize.min, children: children),
+    );
+  }
+}
+
 class _BattleLogDetails extends StatelessWidget {
   final String title;
   final BattleData battleData;
@@ -526,6 +673,7 @@ enum _ParamType {
   refund,
   star,
   bestSupports,
+  bestCE,
   instantDeath;
 
   String get shownName {
@@ -538,6 +686,8 @@ enum _ParamType {
         return S.current.critical_star;
       case _ParamType.bestSupports:
         return 'Best Supports';
+      case _ParamType.bestCE:
+        return 'Best CE';
       case _ParamType.instantDeath:
         return S.current.instant_death;
     }

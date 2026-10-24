@@ -38,6 +38,11 @@ class TdDmgResult {
   List<TdSupportGain>? supportGains;
   List<String> supportErrors = [];
 
+  // Best CE ranking, lazily calculated on demand
+  int? ceBaseDamage;
+  List<TdCeGain>? ceGains;
+  List<String> ceErrors = [];
+
   TdDmgResult(this.originalSvtData, this.battleData) : svt = originalSvtData.svt!;
 
   bool get hasInstantDeath {
@@ -57,6 +62,27 @@ class TdSupportGain {
   final int attackNp;
 
   TdSupportGain({required this.support, required this.damage, required this.gain, required this.attackNp});
+}
+
+/// Damage of an attacker when equipped with [ce] (null = no CE) at the user's owned level/limit break.
+class TdCeGain {
+  final CraftEssence? ce;
+  final int lv;
+  final bool limitBreak;
+  final bool isCurrent; // the CE currently selected in options
+  final int damage;
+  final int gain;
+  final int attackNp;
+
+  TdCeGain({
+    required this.ce,
+    required this.lv,
+    required this.limitBreak,
+    required this.isCurrent,
+    required this.damage,
+    required this.gain,
+    required this.attackNp,
+  });
 }
 
 class TdDmgSolver {
@@ -269,6 +295,103 @@ class TdDmgSolver {
       ..supportErrors = supportErrors;
   }
 
+  /// Try every owned craft essence (at its owned level / limit break) in place of the CE set in options.
+  /// Gains are relative to the current options (selected CE, or no CE). Results are stored in [target.ceGains].
+  Future<void> calcBestCEs(TdDmgResult target) async {
+    if (running.value) return;
+    try {
+      running.value = true;
+      await _calcBestCEs(target);
+      await EasyLoading.dismiss();
+    } catch (e, s) {
+      tryEasyLoading(() => EasyLoading.showError(e.toString()));
+      logger.e('calc best CEs failed', e, s);
+    } finally {
+      running.value = false;
+    }
+  }
+
+  Future<void> _calcBestCEs(TdDmgResult target) async {
+    final quest = getQuest();
+    final mcData = getMysticCodeData();
+    final delegate = getDelegate();
+
+    final currentCe = db.gameData.craftEssencesById[options.ceId];
+    final baseline = await calcOneSvt(target.originalSvtData, quest, mcData, delegate);
+    final baseDamage = baseline?.totalDamage ?? target.totalDamage;
+
+    final List<TdCeGain> gains = [];
+    final List<String> ceErrors = [];
+
+    // with a CE selected, also show what removing it would do
+    if (currentCe != null) {
+      final result = await calcOneSvt(target.originalSvtData, quest, mcData, delegate, equip1: SvtEquipData());
+      if (result != null) {
+        gains.add(
+          TdCeGain(
+            ce: null,
+            lv: 0,
+            limitBreak: false,
+            isCurrent: false,
+            damage: result.totalDamage,
+            gain: result.totalDamage - baseDamage,
+            attackNp: result.attackNp,
+          ),
+        );
+      }
+    }
+
+    final ces = db.gameData.craftEssences.values.where((ce) {
+      if (ce.collectionNo <= 0) return false;
+      if (ce.flags.contains(SvtFlag.svtEquipExp)) return false;
+      return ce.status.status == CraftStatus.owned;
+    }).toList();
+    ces.sort2((e) => e.collectionNo);
+
+    for (final (idx, ce) in ces.indexed) {
+      if (idx % 10 == 0) {
+        EasyLoading.showProgress(
+          idx / max(1, ces.length),
+          status: '$idx / ${ces.length}',
+          maskType: EasyLoadingMaskType.clear,
+        );
+        await Future.delayed(const Duration(milliseconds: 5));
+      }
+      final status = ce.status;
+      final lv = status.lv.clamp(1, ce.lvMax);
+      final limitBreak = status.limitCount >= 4;
+      try {
+        final result = await calcOneSvt(
+          target.originalSvtData,
+          quest,
+          mcData,
+          delegate,
+          equip1: SvtEquipData(ce: ce, lv: lv, limitBreak: limitBreak),
+        );
+        if (result == null) continue;
+        gains.add(
+          TdCeGain(
+            ce: ce,
+            lv: lv,
+            limitBreak: limitBreak,
+            isCurrent: ce.id == currentCe?.id,
+            damage: result.totalDamage,
+            gain: result.totalDamage - baseDamage,
+            attackNp: result.attackNp,
+          ),
+        );
+      } catch (e, s) {
+        ceErrors.add('CE: ${ce.collectionNo} - ${ce.lName.l}\nError: $e');
+        logger.e('calc ce ${ce.collectionNo} error', e, s);
+      }
+    }
+    gains.sortByList((e) => [-e.damage, -e.attackNp, e.ce?.collectionNo ?? 0]);
+    target
+      ..ceBaseDamage = baseDamage
+      ..ceGains = gains
+      ..ceErrors = ceErrors;
+  }
+
   final _debuffImmuneSkill = NiceSkill(
     id: -1000091,
     name: 'Debuff Immune',
@@ -295,10 +418,12 @@ class TdDmgSolver {
     MysticCodeData mcData,
     BattleDelegate delegate, {
     List<int> extraSupports = const [],
+    SvtEquipData? equip1, // override the CE from options
   }) async {
     final battleData = BattleData();
     final data = TdDmgResult(svtData, battleData);
     final attacker = data.originalSvtData.copy();
+    if (equip1 != null) attacker.equip1 = equip1;
     battleData.delegate = delegate;
     battleData.options
       ..random = options.random
