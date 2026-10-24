@@ -967,10 +967,11 @@ class TdDamageOptions {
 
   // class board & grand graph
   PreferClassBoardDataSource classBoard;
-  bool grandSvt;
+  @JsonKey(readValue: TdDamageOptions._readGrandSvt)
+  GrandSvtSource grandSvt; // Disabled / Current (user's Grand flag per servant) / Max
   bool commandSpell; // use a Command Spell before NP, triggers class board's Command Spell Excitation
   PreferClassBoardDataSource grandBoard;
-  bool get isUseGrandBoard => grandSvt && !grandBoard.isNone;
+  bool get isUseGrandBoard => grandSvt != GrandSvtSource.disabled && !grandBoard.isNone;
   BondEquipType equip2Type;
   int equip3;
 
@@ -1016,7 +1017,7 @@ class TdDamageOptions {
     this.enemyCount = 1,
     this.usePlayerSvt = PreferPlayerSvtDataSource.none,
     this.classBoard = PreferClassBoardDataSource.none,
-    this.grandSvt = false,
+    this.grandSvt = GrandSvtSource.disabled,
     this.commandSpell = false,
     this.grandBoard = PreferClassBoardDataSource.none,
     this.equip2Type = BondEquipType.none,
@@ -1082,6 +1083,13 @@ class TdDamageOptions {
   static const List<int> optionalSupports = [37, 62, 150, 215, 241, 284, 314, 316, 353, 357];
 
   factory TdDamageOptions.fromJson(Map<String, dynamic> json) => _$TdDamageOptionsFromJson(json);
+
+  /// "grandSvt" used to be a bool: true -> max, false -> disabled
+  static Object? _readGrandSvt(Map data, String key) {
+    final value = data[key];
+    if (value is bool) return (value ? GrandSvtSource.max : GrandSvtSource.disabled).name;
+    return value;
+  }
 
   Map<String, dynamic> toJson() => _$TdDamageOptionsToJson(this);
 }
@@ -1149,6 +1157,29 @@ enum PreferClassBoardDataSource {
       current => board.status,
       target => board.plan_,
       full => ClassBoardPlan.full(board),
+    };
+  }
+}
+
+enum GrandSvtSource {
+  disabled,
+  current,
+  max;
+
+  String get shownName {
+    return switch (this) {
+      GrandSvtSource.disabled => S.current.disabled,
+      GrandSvtSource.current => S.current.current_,
+      GrandSvtSource.max => "Max",
+    };
+  }
+
+  /// Whether [svt] is treated as a Grand Servant. Current = the Grand flag in the user's servant data.
+  bool isGrand(Servant svt) {
+    return switch (this) {
+      GrandSvtSource.disabled => false,
+      GrandSvtSource.current => svt.status.grandSvt,
+      GrandSvtSource.max => true,
     };
   }
 }

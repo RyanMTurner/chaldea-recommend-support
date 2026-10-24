@@ -541,7 +541,11 @@ TdDamageOptions _$TdDamageOptionsFromJson(Map json) => $checkedCreate('TdDamageO
       'classBoard',
       (v) => $enumDecodeNullable(_$PreferClassBoardDataSourceEnumMap, v) ?? PreferClassBoardDataSource.none,
     ),
-    grandSvt: $checkedConvert('grandSvt', (v) => v as bool? ?? false),
+    grandSvt: $checkedConvert(
+      'grandSvt',
+      (v) => $enumDecodeNullable(_$GrandSvtSourceEnumMap, v) ?? GrandSvtSource.disabled,
+      readValue: TdDamageOptions._readGrandSvt,
+    ),
     commandSpell: $checkedConvert('commandSpell', (v) => v as bool? ?? false),
     grandBoard: $checkedConvert(
       'grandBoard',
@@ -594,7 +598,7 @@ Map<String, dynamic> _$TdDamageOptionsToJson(TdDamageOptions instance) => <Strin
   'enemyCount': instance.enemyCount,
   'usePlayerSvt': _$PreferPlayerSvtDataSourceEnumMap[instance.usePlayerSvt]!,
   'classBoard': _$PreferClassBoardDataSourceEnumMap[instance.classBoard]!,
-  'grandSvt': instance.grandSvt,
+  'grandSvt': _$GrandSvtSourceEnumMap[instance.grandSvt]!,
   'commandSpell': instance.commandSpell,
   'grandBoard': _$PreferClassBoardDataSourceEnumMap[instance.grandBoard]!,
   'equip2Type': _$BondEquipTypeEnumMap[instance.equip2Type]!,
@@ -628,6 +632,12 @@ Map<String, dynamic> _$TdDamageOptionsToJson(TdDamageOptions instance) => <Strin
   'damageNpIndivSumCount': instance.damageNpIndivSumCount,
   'damageNpHpRatioMax': instance.damageNpHpRatioMax,
   'simpleMode': instance.simpleMode,
+};
+
+const _$GrandSvtSourceEnumMap = {
+  GrandSvtSource.disabled: 'disabled',
+  GrandSvtSource.current: 'current',
+  GrandSvtSource.max: 'max',
 };
 
 const _$PreferClassBoardDataSourceEnumMap = {

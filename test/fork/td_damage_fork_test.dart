@@ -3,6 +3,7 @@
 //   2. Best CE list
 //   3. Best MC list
 //   5. Command Spell calculator option
+//   8. Grand Servant option: Disabled / Current / Max
 //
 // Run: flutter test test/fork --dart-define=APP_PATH=/path/to/app/data
 import 'dart:convert';
@@ -241,6 +242,56 @@ void main() async {
       final legacy = jsonDecode(jsonEncode(TdDamageOptions().toJson())) as Map<String, dynamic>;
       legacy.remove('commandSpell');
       expect(TdDamageOptions.fromJson(legacy).commandSpell, isFalse);
+    });
+  });
+
+  group('Grand Servant option', () {
+    final altria = db.gameData.servantsById[kAltria]!;
+    late bool savedGrand;
+    setUp(() => savedGrand = altria.status.grandSvt);
+    tearDown(() => altria.status.grandSvt = savedGrand);
+
+    test('Disabled / Max apply to every servant, Current follows the Grand flag in user data', () {
+      final solver = TdDmgSolver();
+      bool grandOf(GrandSvtSource source) {
+        options.grandSvt = source;
+        return solver.getSvtData(altria, 4)!.grandSvt;
+      }
+
+      altria.status.grandSvt = false;
+      expect(grandOf(GrandSvtSource.disabled), isFalse);
+      expect(grandOf(GrandSvtSource.max), isTrue);
+      expect(grandOf(GrandSvtSource.current), isFalse);
+      altria.status.grandSvt = true;
+      expect(grandOf(GrandSvtSource.current), isTrue);
+      expect(grandOf(GrandSvtSource.disabled), isFalse);
+    });
+
+    test('Grand Board only applies to servants treated as Grand', () {
+      final solver = TdDmgSolver();
+      options
+        ..grandBoard = PreferClassBoardDataSource.full
+        ..grandSvt = GrandSvtSource.current;
+      altria.status.grandSvt = false;
+      expect(solver.getSvtData(altria, 4)!.classBoardData.grandClassBoardSquares, isEmpty);
+      altria.status.grandSvt = true;
+      if (ClassBoard.getGrandClassBoard(altria.classId) != null) {
+        expect(solver.getSvtData(altria, 4)!.classBoardData.grandClassBoardSquares, isNotEmpty);
+      }
+    });
+
+    test('saved settings: old on/off values load as Max/Disabled', () {
+      Map<String, dynamic> json(Object? grandSvt) =>
+          (jsonDecode(jsonEncode(TdDamageOptions().toJson())) as Map<String, dynamic>)..['grandSvt'] = grandSvt;
+      expect(TdDamageOptions.fromJson(json(true)).grandSvt, GrandSvtSource.max);
+      expect(TdDamageOptions.fromJson(json(false)).grandSvt, GrandSvtSource.disabled);
+      expect(TdDamageOptions.fromJson(json(null)).grandSvt, GrandSvtSource.disabled);
+      for (final source in GrandSvtSource.values) {
+        final roundTrip = TdDamageOptions.fromJson(
+          jsonDecode(jsonEncode((TdDamageOptions()..grandSvt = source).toJson())),
+        );
+        expect(roundTrip.grandSvt, source);
+      }
     });
   });
 }
