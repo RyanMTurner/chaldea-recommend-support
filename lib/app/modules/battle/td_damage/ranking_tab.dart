@@ -1,6 +1,7 @@
 import 'package:chaldea/app/app.dart';
 import 'package:chaldea/app/battle/models/battle.dart';
 import 'package:chaldea/app/battle/utils/battle_logger.dart';
+import 'package:chaldea/app/modules/common/filter_page_base.dart';
 import 'package:chaldea/app/modules/common/filter_group.dart';
 import 'package:chaldea/app/modules/common/misc.dart';
 import 'package:chaldea/generated/l10n.dart';
@@ -25,6 +26,8 @@ class TdDmgRankingTab extends StatefulWidget {
 
 class _TdDmgRankingTabState extends State<TdDmgRankingTab> {
   _SortType _sortType = _SortType.damage;
+  // filter for the Best Supports lists, independent of the damage dealer filter
+  final supportFilterData = SvtFilterData();
 
   final scrollController = ScrollController();
 
@@ -138,6 +141,7 @@ class _TdDmgRankingTabState extends State<TdDmgRankingTab> {
           contentBuilder: (context) => _ResultDetail(
             key: Key('ResultDetail_${index}_${_sortType}_${result.svt.id}'),
             solver: widget.solver,
+            supportFilterData: supportFilterData,
             result: result,
             tab: result.hasInstantDeathSuccess
                 ? _ParamType.instantDeath
@@ -206,9 +210,16 @@ class _TdDmgRankingTabState extends State<TdDmgRankingTab> {
 
 class _ResultDetail extends StatefulWidget {
   final TdDmgSolver solver;
+  final SvtFilterData supportFilterData;
   final TdDmgResult result;
   final _ParamType? tab;
-  const _ResultDetail({super.key, required this.solver, required this.result, this.tab});
+  const _ResultDetail({
+    super.key,
+    required this.solver,
+    required this.supportFilterData,
+    required this.result,
+    this.tab,
+  });
 
   @override
   State<_ResultDetail> createState() => _ResultDetailState();
@@ -242,6 +253,7 @@ class _ResultDetailState extends State<_ResultDetail> {
         _BestSupportsView(
           key: Key('BestSupports_${widget.result.hashCode}'),
           solver: widget.solver,
+          filterData: widget.supportFilterData,
           result: widget.result,
         ),
       );
@@ -319,8 +331,9 @@ class _ResultDetailState extends State<_ResultDetail> {
 
 class _BestSupportsView extends StatefulWidget {
   final TdDmgSolver solver;
+  final SvtFilterData filterData;
   final TdDmgResult result;
-  const _BestSupportsView({super.key, required this.solver, required this.result});
+  const _BestSupportsView({super.key, required this.solver, required this.filterData, required this.result});
 
   @override
   State<_BestSupportsView> createState() => _BestSupportsViewState();
@@ -348,6 +361,20 @@ class _BestSupportsViewState extends State<_BestSupportsView> {
 
   String _fmt(int v) => v.format(groupSeparator: ",", compact: false);
 
+  void _showFilter() {
+    FilterPage.show(
+      context: context,
+      builder: (context) => ServantFilterPage(
+        filterData: widget.filterData,
+        onChanged: (_) {
+          if (mounted) setState(() {});
+        },
+        planMode: false,
+        showSort: false,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final gains = widget.result.supportGains;
@@ -362,7 +389,10 @@ class _BestSupportsViewState extends State<_BestSupportsView> {
     }
     final theme = Theme.of(context);
     final baseDamage = widget.result.supportBaseDamage ?? widget.result.totalDamage;
-    final positive = gains.where((e) => e.gain > 0).toList();
+    final filterData = widget.filterData;
+    final filterActive = filterData.groups.any((g) => !g.isEmpty);
+    final filtered = gains.where((e) => ServantFilterPage.filter(filterData, e.support)).toList();
+    final positive = filtered.where((e) => e.gain > 0).toList();
     final shown = _showAll ? positive : positive.take(_kCollapsedCount).toList();
 
     List<Widget> children = [
@@ -371,17 +401,29 @@ class _BestSupportsViewState extends State<_BestSupportsView> {
         title: Text('Baseline ${S.current.damage}: ${_fmt(baseDamage)}'),
         subtitle: Text(
           'Each servant added as an extra support (skills used in order 1→2→3) on top of current options. '
-          '${gains.length - positive.length} servants gave no increase.',
+          '${filtered.length - positive.length} servants gave no increase.'
+          '${filterActive ? '\nFiltered: ${filtered.length} / ${gains.length} servants shown.' : ''}',
         ),
-        trailing: IconButton(
-          tooltip: 'Recalculate',
-          onPressed: _calculate,
-          icon: const Icon(Icons.refresh),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              tooltip: S.current.filter,
+              onPressed: _showFilter,
+              icon: Icon(Icons.filter_alt, color: filterActive ? theme.colorScheme.primary : null),
+            ),
+            IconButton(tooltip: 'Recalculate', onPressed: _calculate, icon: const Icon(Icons.refresh)),
+          ],
         ),
       ),
     ];
     if (positive.isEmpty) {
-      children.add(const Padding(padding: EdgeInsets.all(8), child: Text('No support increases damage.')));
+      children.add(
+        Padding(
+          padding: const EdgeInsets.all(8),
+          child: Text(filterActive ? 'No filtered support increases damage.' : 'No support increases damage.'),
+        ),
+      );
     }
     for (final (index, gain) in shown.indexed) {
       final percent = baseDamage > 0 ? gain.gain / baseDamage * 100 : 0.0;
