@@ -137,6 +137,7 @@ class _TdDmgRankingTabState extends State<TdDmgRankingTab> {
           headerBuilder: (context, _) => headerBuilder(rank, result),
           contentBuilder: (context) => _ResultDetail(
             key: Key('ResultDetail_${index}_${_sortType}_${result.svt.id}'),
+            solver: widget.solver,
             result: result,
             tab: result.hasInstantDeathSuccess
                 ? _ParamType.instantDeath
@@ -204,9 +205,10 @@ class _TdDmgRankingTabState extends State<TdDmgRankingTab> {
 }
 
 class _ResultDetail extends StatefulWidget {
+  final TdDmgSolver solver;
   final TdDmgResult result;
   final _ParamType? tab;
-  const _ResultDetail({super.key, required this.result, this.tab});
+  const _ResultDetail({super.key, required this.solver, required this.result, this.tab});
 
   @override
   State<_ResultDetail> createState() => _ResultDetailState();
@@ -234,6 +236,17 @@ class _ResultDetailState extends State<_ResultDetail> {
         },
       ),
     ];
+
+    if (tab == _ParamType.bestSupports) {
+      children.add(
+        _BestSupportsView(
+          key: Key('BestSupports_${widget.result.hashCode}'),
+          solver: widget.solver,
+          result: widget.result,
+        ),
+      );
+      return Column(mainAxisSize: MainAxisSize.min, children: children);
+    }
 
     for (final attack in widget.result.attacks) {
       Widget? paramsCard;
@@ -272,6 +285,7 @@ class _ResultDetailState extends State<_ResultDetail> {
             );
             break;
           case _ParamType.instantDeath:
+          case _ParamType.bestSupports:
             break;
         }
       } else if (attack is BattleInstantDeathRecord) {
@@ -300,6 +314,122 @@ class _ResultDetailState extends State<_ResultDetail> {
       ),
     );
     return Column(mainAxisSize: MainAxisSize.min, children: children);
+  }
+}
+
+class _BestSupportsView extends StatefulWidget {
+  final TdDmgSolver solver;
+  final TdDmgResult result;
+  const _BestSupportsView({super.key, required this.solver, required this.result});
+
+  @override
+  State<_BestSupportsView> createState() => _BestSupportsViewState();
+}
+
+class _BestSupportsViewState extends State<_BestSupportsView> {
+  static const _kCollapsedCount = 20;
+  bool _showAll = false;
+  bool _calculating = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.result.supportGains == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _calculate());
+    }
+  }
+
+  Future<void> _calculate() async {
+    if (_calculating || widget.solver.running.value) return;
+    setState(() => _calculating = true);
+    await widget.solver.calcBestSupports(widget.result);
+    if (mounted) setState(() => _calculating = false);
+  }
+
+  String _fmt(int v) => v.format(groupSeparator: ",", compact: false);
+
+  @override
+  Widget build(BuildContext context) {
+    final gains = widget.result.supportGains;
+    if (_calculating) {
+      return const Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator());
+    }
+    if (gains == null) {
+      return Padding(
+        padding: const EdgeInsets.all(8),
+        child: FilledButton(onPressed: _calculate, child: const Text('Calculate Best Supports')),
+      );
+    }
+    final theme = Theme.of(context);
+    final baseDamage = widget.result.supportBaseDamage ?? widget.result.totalDamage;
+    final positive = gains.where((e) => e.gain > 0).toList();
+    final shown = _showAll ? positive : positive.take(_kCollapsedCount).toList();
+
+    List<Widget> children = [
+      ListTile(
+        dense: true,
+        title: Text('Baseline ${S.current.damage}: ${_fmt(baseDamage)}'),
+        subtitle: Text(
+          'Each servant added as an extra support (skills used in order 1→2→3) on top of current options. '
+          '${gains.length - positive.length} servants gave no increase.',
+        ),
+        trailing: IconButton(
+          tooltip: 'Recalculate',
+          onPressed: _calculate,
+          icon: const Icon(Icons.refresh),
+        ),
+      ),
+    ];
+    if (positive.isEmpty) {
+      children.add(const Padding(padding: EdgeInsets.all(8), child: Text('No support increases damage.')));
+    }
+    for (final (index, gain) in shown.indexed) {
+      final percent = baseDamage > 0 ? gain.gain / baseDamage * 100 : 0.0;
+      children.add(
+        ListTile(
+          dense: true,
+          contentPadding: const EdgeInsetsDirectional.only(start: 12, end: 12),
+          leading: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('${(index + 1).toString().padRight(2)} ', style: kMonoStyle, textScaler: const TextScaler.linear(0.8)),
+              gain.support.iconBuilder(context: context, width: 32),
+            ],
+          ),
+          title: Text(gain.support.lName.l, maxLines: 1, overflow: TextOverflow.ellipsis),
+          subtitle: Text('${S.current.damage} ${_fmt(gain.damage)}'),
+          trailing: Text(
+            '+${_fmt(gain.gain)}\n+${percent.toStringAsFixed(1)}%',
+            textAlign: TextAlign.end,
+            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.primary),
+          ),
+        ),
+      );
+    }
+    if (positive.length > _kCollapsedCount) {
+      children.add(
+        TextButton(
+          onPressed: () => setState(() => _showAll = !_showAll),
+          child: Text(_showAll ? 'Show top $_kCollapsedCount' : 'Show all (${positive.length})'),
+        ),
+      );
+    }
+    final errors = widget.result.supportErrors;
+    if (errors.isNotEmpty) {
+      children.add(
+        SimpleAccordion(
+          headerBuilder: (context, _) => ListTile(
+            dense: true,
+            title: Text('${errors.length} ${S.current.error}', style: TextStyle(color: theme.colorScheme.error)),
+          ),
+          contentBuilder: (context) => Padding(padding: const EdgeInsets.all(8), child: Text(errors.join('\n\n'))),
+        ),
+      );
+    }
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: Column(mainAxisSize: MainAxisSize.min, children: children),
+    );
   }
 }
 
@@ -353,6 +483,7 @@ enum _ParamType {
   damage,
   refund,
   star,
+  bestSupports,
   instantDeath;
 
   String get shownName {
@@ -363,6 +494,8 @@ enum _ParamType {
         return S.current.np_refund_short;
       case _ParamType.star:
         return S.current.critical_star;
+      case _ParamType.bestSupports:
+        return 'Best Supports';
       case _ParamType.instantDeath:
         return S.current.instant_death;
     }

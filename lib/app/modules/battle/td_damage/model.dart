@@ -33,6 +33,11 @@ class TdDmgResult {
   int attackNp = 0;
   int totalNp = 0;
 
+  // Best Supports ranking, lazily calculated on demand
+  int? supportBaseDamage;
+  List<TdSupportGain>? supportGains;
+  List<String> supportErrors = [];
+
   TdDmgResult(this.originalSvtData, this.battleData) : svt = originalSvtData.svt!;
 
   bool get hasInstantDeath {
@@ -42,6 +47,16 @@ class TdDmgResult {
   bool get hasInstantDeathSuccess {
     return attacks.whereType<BattleInstantDeathRecord>().any((e) => e.hasSuccess);
   }
+}
+
+/// Damage of an attacker when [support]'s active skills are added on top of the current options.
+class TdSupportGain {
+  final Servant support;
+  final int damage;
+  final int gain;
+  final int attackNp;
+
+  TdSupportGain({required this.support, required this.damage, required this.gain, required this.attackNp});
 }
 
 class TdDmgSolver {
@@ -69,19 +84,9 @@ class TdDmgSolver {
   Future<void> _calculate() async {
     results.clear();
     errors.clear();
-    final List<Servant> servants;
-    final releasedSvts = db.gameData.mappingData.entityRelease.ofRegion(options.region) ?? [];
-    if (options.region != Region.jp && releasedSvts.isNotEmpty) {
-      servants = releasedSvts.map((e) => db.gameData.servantsById[e]).whereType<Servant>().toList();
-    } else {
-      servants = db.gameData.servantsById.values.toList();
-    }
-    servants.sort2((e) => e.collectionNo);
+    final servants = getServantList();
     final quest = getQuest();
-    final mcData = MysticCodeData();
-    mcData
-      ..mysticCode = db.gameData.mysticCodes[options.mcId]
-      ..level = options.mcLv;
+    final mcData = getMysticCodeData();
     final delegate = getDelegate();
     // final t = StopwatchX('calc');
     for (final (idx, svt) in servants.indexed) {
@@ -185,6 +190,85 @@ class TdDmgSolver {
     }
   }
 
+  List<Servant> getServantList() {
+    final List<Servant> servants;
+    final releasedSvts = db.gameData.mappingData.entityRelease.ofRegion(options.region) ?? [];
+    if (options.region != Region.jp && releasedSvts.isNotEmpty) {
+      servants = releasedSvts.map((e) => db.gameData.servantsById[e]).whereType<Servant>().toList();
+    } else {
+      servants = db.gameData.servantsById.values.toList();
+    }
+    servants.sort2((e) => e.collectionNo);
+    return servants;
+  }
+
+  MysticCodeData getMysticCodeData() {
+    return MysticCodeData()
+      ..mysticCode = db.gameData.mysticCodes[options.mcId]
+      ..level = options.mcLv;
+  }
+
+  /// For the attacker of [target], try every playable servant as an additional support
+  /// (on top of the supports already set in options) and rank them by damage increase.
+  /// Results are stored in [target.supportGains].
+  Future<void> calcBestSupports(TdDmgResult target) async {
+    if (running.value) return;
+    try {
+      running.value = true;
+      await _calcBestSupports(target);
+      await EasyLoading.dismiss();
+    } catch (e, s) {
+      tryEasyLoading(() => EasyLoading.showError(e.toString()));
+      logger.e('calc best supports failed', e, s);
+    } finally {
+      running.value = false;
+    }
+  }
+
+  Future<void> _calcBestSupports(TdDmgResult target) async {
+    final quest = getQuest();
+    final mcData = getMysticCodeData();
+    final delegate = getDelegate();
+
+    // re-calc baseline with current options, so that every gain is measured against the same setup
+    final baseline = await calcOneSvt(target.originalSvtData, quest, mcData, delegate);
+    final baseDamage = baseline?.totalDamage ?? target.totalDamage;
+
+    final servants = getServantList().where((e) => e.isUserSvt).toList();
+    final List<TdSupportGain> gains = [];
+    final List<String> supportErrors = [];
+    for (final (idx, svt) in servants.indexed) {
+      if (idx % 10 == 0) {
+        EasyLoading.showProgress(
+          idx / servants.length,
+          status: '$idx / ${servants.length}',
+          maskType: EasyLoadingMaskType.clear,
+        );
+        await Future.delayed(const Duration(milliseconds: 5));
+      }
+      try {
+        final result = await calcOneSvt(target.originalSvtData, quest, mcData, delegate, extraSupports: [svt.id]);
+        if (result == null) continue;
+        gains.add(
+          TdSupportGain(
+            support: svt,
+            damage: result.totalDamage,
+            gain: result.totalDamage - baseDamage,
+            attackNp: result.attackNp,
+          ),
+        );
+      } catch (e, s) {
+        supportErrors.add('SVT: ${svt.collectionNo} - ${svt.lName.l}\nError: $e');
+        logger.e('calc support ${svt.collectionNo} error', e, s);
+      }
+    }
+    gains.sortByList((e) => [-e.gain, -e.attackNp, e.support.collectionNo]);
+    target
+      ..supportBaseDamage = baseDamage
+      ..supportGains = gains
+      ..supportErrors = supportErrors;
+  }
+
   final _debuffImmuneSkill = NiceSkill(
     id: -1000091,
     name: 'Debuff Immune',
@@ -209,8 +293,9 @@ class TdDmgSolver {
     PlayerSvtData svtData,
     QuestPhase quest,
     MysticCodeData mcData,
-    BattleDelegate delegate,
-  ) async {
+    BattleDelegate delegate, {
+    List<int> extraSupports = const [],
+  }) async {
     final battleData = BattleData();
     final data = TdDmgResult(svtData, battleData);
     final attacker = data.originalSvtData.copy();
@@ -268,7 +353,7 @@ class TdDmgSolver {
       }
     }
 
-    for (final svtId in options.supports) {
+    for (final svtId in [...options.supports, ...extraSupports]) {
       final svt = db.gameData.servantsById[svtId];
       if (svt == null) continue;
       final sdata = PlayerSvtData.svt(svt);
