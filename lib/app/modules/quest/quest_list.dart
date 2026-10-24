@@ -22,6 +22,9 @@ class QuestListPage extends StatefulWidget {
   final MasterDataManager? mstData;
   final void Function(int questId, Quest? quest)? onSelected;
 
+  /// Free quest lists: show "AP 40 | Bond 3797 | Eff 94.925" and sort by bond per AP, highest first.
+  final bool showBondEfficiency;
+
   const QuestListPage({
     super.key,
     this.quests = const [],
@@ -31,6 +34,7 @@ class QuestListPage extends StatefulWidget {
     this.groupByWar,
     this.mstData,
     this.onSelected,
+    this.showBondEfficiency = false,
   }) : ids = const [];
 
   const QuestListPage.ids({
@@ -42,7 +46,31 @@ class QuestListPage extends StatefulWidget {
     this.groupByWar,
     this.mstData,
     this.onSelected,
+    this.showBondEfficiency = false,
   }) : quests = const [];
+
+  /// (AP/BP cost, bond) of a repeatable quest's last phase, null if unknown.
+  static (int consume, int bond)? bondInfo(Quest quest) {
+    if (quest.phases.isEmpty || !quest.consumeType.useApOrBp) return null;
+    if (!(quest.afterClear.isRepeat || quest.phases.length == 1)) return null;
+    final key = quest.id * 100 + quest.phases.last;
+    final detail = db.gameData.questPhaseDetails[key];
+    final consume = detail?.actConsume ?? quest.consume;
+    final bond = db.gameData.questPhases[key]?.bond ?? detail?.bond ?? 0;
+    return (consume, bond);
+  }
+
+  /// Bond per AP, null when bond or cost is unknown.
+  static double? bondEfficiency(Quest quest) {
+    final info = bondInfo(quest);
+    if (info == null || info.$1 <= 0 || info.$2 <= 0) return null;
+    return info.$2 / info.$1;
+  }
+
+  /// 94.925, 95, 94.9 (up to 3 decimals, no trailing zeros)
+  static String formatEfficiency(double eff) {
+    return eff.toStringAsFixed(3).replaceFirst(RegExp(r'\.?0+$'), '');
+  }
 
   @override
   State<QuestListPage> createState() => _QuestListPageState();
@@ -94,6 +122,15 @@ class _QuestListPageState extends State<QuestListPage> {
       } else {
         questIds.sort(Quest.compareId);
       }
+    }
+
+    if (widget.showBondEfficiency) {
+      final order = {for (final (index, id) in questIds.indexed) id: index};
+      questIds.sortByList((questId) {
+        final quest = allQuestsMap[questId];
+        final eff = quest == null ? null : QuestListPage.bondEfficiency(quest);
+        return <num>[eff == null ? 1 : 0, -(eff ?? 0), order[questId]!];
+      });
     }
 
     final hasSpot = questIds.any((q) => allQuestsMap[q]?.spot?.shownImage != null);
@@ -158,7 +195,18 @@ class _QuestListPageState extends State<QuestListPage> {
           (quest.afterClear.isRepeat || quest.phases.length == 1)) {
         final int consume =
             db.gameData.questPhaseDetails[quest.id * 100 + quest.phases.last]?.actConsume ?? quest.consume;
-        consumes.add(TextSpan(text: '${quest.consumeType.unit}$consume'));
+        final eff = widget.showBondEfficiency ? QuestListPage.bondEfficiency(quest) : null;
+        if (eff != null) {
+          final bond = QuestListPage.bondInfo(quest)!.$2;
+          consumes.add(
+            TextSpan(
+              text:
+                  '${quest.consumeType.unit} $consume | ${S.current.bond} $bond | Eff ${QuestListPage.formatEfficiency(eff)}',
+            ),
+          );
+        } else {
+          consumes.add(TextSpan(text: '${quest.consumeType.unit}$consume'));
+        }
       }
       consumes.addAll([
         for (final itemAmount in quest.consumeItem)
