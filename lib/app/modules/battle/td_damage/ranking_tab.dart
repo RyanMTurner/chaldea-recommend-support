@@ -266,6 +266,7 @@ class _ResultDetailState extends State<_ResultDetail> {
           key: Key('BestSupports_${widget.result.hashCode}'),
           solver: widget.solver,
           filterData: widget.supportFilterData,
+          onOptionsChanged: widget.onOptionsChanged,
           result: widget.result,
         ),
       );
@@ -357,8 +358,15 @@ class _ResultDetailState extends State<_ResultDetail> {
 class _BestSupportsView extends StatefulWidget {
   final TdDmgSolver solver;
   final SvtFilterData filterData;
+  final VoidCallback? onOptionsChanged;
   final TdDmgResult result;
-  const _BestSupportsView({super.key, required this.solver, required this.filterData, required this.result});
+  const _BestSupportsView({
+    super.key,
+    required this.solver,
+    required this.filterData,
+    this.onOptionsChanged,
+    required this.result,
+  });
 
   @override
   State<_BestSupportsView> createState() => _BestSupportsViewState();
@@ -385,6 +393,23 @@ class _BestSupportsViewState extends State<_BestSupportsView> {
   }
 
   String _fmt(int v) => v.format(groupSeparator: ",", compact: false);
+
+  static const _kMaxSupports = 5; // same limit as the options tab
+
+  void _addSupport(Servant svt) {
+    final supports = widget.solver.options.supports;
+    if (supports.length >= _kMaxSupports) {
+      EasyLoading.showToast('Max $_kMaxSupports supports');
+      return;
+    }
+    supports.add(svt.id);
+    setState(() {});
+    widget.onOptionsChanged?.call();
+    EasyLoading.showToast(
+      'Support added: ${svt.lName.l} (${supports.length}/$_kMaxSupports)'
+      '\nPress ${S.current.calculate} to update the rankings.',
+    );
+  }
 
   void _showFilter() {
     FilterPage.show(
@@ -465,10 +490,33 @@ class _BestSupportsViewState extends State<_BestSupportsView> {
           ),
           title: Text(gain.support.lName.l, maxLines: 1, overflow: TextOverflow.ellipsis),
           subtitle: Text('${S.current.damage} ${_fmt(gain.damage)}'),
-          trailing: Text(
-            '+${_fmt(gain.gain)}\n+${percent.toStringAsFixed(1)}%',
-            textAlign: TextAlign.end,
-            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.primary),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '+${_fmt(gain.gain)}\n+${percent.toStringAsFixed(1)}%',
+                textAlign: TextAlign.end,
+                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.primary),
+              ),
+              Builder(
+                builder: (context) {
+                  final supports = widget.solver.options.supports;
+                  final count = supports.where((id) => id == gain.support.id).length;
+                  final full = supports.length >= _kMaxSupports;
+                  return IconButton(
+                    tooltip: full
+                        ? 'Max $_kMaxSupports supports'
+                        : count > 0
+                        ? 'Already added ($count). Add another'
+                        : 'Add as support',
+                    onPressed: full ? null : () => _addSupport(gain.support),
+                    icon: Icon(count > 0 ? Icons.add_circle : Icons.add_circle_outline),
+                    color: theme.colorScheme.primary,
+                    visualDensity: VisualDensity.compact,
+                  );
+                },
+              ),
+            ],
           ),
         ),
       );
