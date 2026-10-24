@@ -267,12 +267,12 @@ class TdDmgSolver {
   /// For the attacker of [target], try every playable servant as an additional support
   /// (on top of the supports already set in options) and rank them by damage increase.
   /// Results are stored in [target.supportGains].
-  Future<void> calcBestSupports(TdDmgResult target) async {
+  Future<void> calcBestSupports(TdDmgResult target, {List<Servant>? candidates}) async {
     if (running.value) return;
     try {
       running.value = true;
-      await _calcBestSupports(target);
-      await EasyLoading.dismiss();
+      await _calcBestSupports(target, candidates);
+      await tryEasyLoading(() => EasyLoading.dismiss());
     } catch (e, s) {
       tryEasyLoading(() => EasyLoading.showError(e.toString()));
       logger.e('calc best supports failed', e, s);
@@ -281,7 +281,7 @@ class TdDmgSolver {
     }
   }
 
-  Future<void> _calcBestSupports(TdDmgResult target) async {
+  Future<void> _calcBestSupports(TdDmgResult target, List<Servant>? candidates) async {
     final quest = getQuest();
     final mcData = getMysticCodeData();
     final delegate = getDelegate();
@@ -290,16 +290,18 @@ class TdDmgSolver {
     final baseline = await calcOneSvt(target.originalSvtData, quest, mcData, delegate);
     final baseDamage = baseline?.totalDamage ?? target.totalDamage;
 
-    final servants = getServantList().where((e) => e.isUserSvt).toList();
+    final servants = (candidates ?? getServantList()).where((e) => e.isUserSvt).toList();
     final List<TdSupportGain> gains = [];
     final List<String> supportErrors = [];
     for (final (idx, svt) in servants.indexed) {
       if (idx % 10 == 0) {
-        EasyLoading.showProgress(
-          idx / servants.length,
-          status: '$idx / ${servants.length}',
-          maskType: EasyLoadingMaskType.clear,
-        );
+        if (isEasyLoadingAttached) {
+          EasyLoading.showProgress(
+            idx / servants.length,
+            status: '$idx / ${servants.length}',
+            maskType: EasyLoadingMaskType.clear,
+          );
+        }
         await Future.delayed(const Duration(milliseconds: 5));
       }
       try {
@@ -327,12 +329,12 @@ class TdDmgSolver {
 
   /// Try every owned craft essence (at its owned level / limit break) in place of the CE set in options.
   /// Gains are relative to the current options (selected CE, or no CE). Results are stored in [target.ceGains].
-  Future<void> calcBestCEs(TdDmgResult target) async {
+  Future<void> calcBestCEs(TdDmgResult target, {List<CraftEssence>? candidates}) async {
     if (running.value) return;
     try {
       running.value = true;
-      await _calcBestCEs(target);
-      await EasyLoading.dismiss();
+      await _calcBestCEs(target, candidates);
+      await tryEasyLoading(() => EasyLoading.dismiss());
     } catch (e, s) {
       tryEasyLoading(() => EasyLoading.showError(e.toString()));
       logger.e('calc best CEs failed', e, s);
@@ -341,7 +343,7 @@ class TdDmgSolver {
     }
   }
 
-  Future<void> _calcBestCEs(TdDmgResult target) async {
+  Future<void> _calcBestCEs(TdDmgResult target, List<CraftEssence>? candidates) async {
     final quest = getQuest();
     final mcData = getMysticCodeData();
     final delegate = getDelegate();
@@ -371,7 +373,7 @@ class TdDmgSolver {
       }
     }
 
-    final ces = db.gameData.craftEssences.values.where((ce) {
+    final ces = (candidates ?? db.gameData.craftEssences.values).where((ce) {
       if (ce.collectionNo <= 0) return false;
       if (ce.flags.contains(SvtFlag.svtEquipExp)) return false;
       return ce.status.status == CraftStatus.owned;
@@ -380,11 +382,13 @@ class TdDmgSolver {
 
     for (final (idx, ce) in ces.indexed) {
       if (idx % 10 == 0) {
-        EasyLoading.showProgress(
-          idx / max(1, ces.length),
-          status: '$idx / ${ces.length}',
-          maskType: EasyLoadingMaskType.clear,
-        );
+        if (isEasyLoadingAttached) {
+          EasyLoading.showProgress(
+            idx / max(1, ces.length),
+            status: '$idx / ${ces.length}',
+            maskType: EasyLoadingMaskType.clear,
+          );
+        }
         await Future.delayed(const Duration(milliseconds: 5));
       }
       final status = ce.status;
@@ -430,12 +434,12 @@ class TdDmgSolver {
 
   /// Try every mystic code (at the user's level) in place of the MC set in options.
   /// Gains are relative to the current options (selected MC, or no MC). Results are stored in [target.mcGains].
-  Future<void> calcBestMCs(TdDmgResult target) async {
+  Future<void> calcBestMCs(TdDmgResult target, {List<MysticCode>? candidates}) async {
     if (running.value) return;
     try {
       running.value = true;
-      await _calcBestMCs(target);
-      await EasyLoading.dismiss();
+      await _calcBestMCs(target, candidates);
+      await tryEasyLoading(() => EasyLoading.dismiss());
     } catch (e, s) {
       tryEasyLoading(() => EasyLoading.showError(e.toString()));
       logger.e('calc best MCs failed', e, s);
@@ -444,7 +448,7 @@ class TdDmgSolver {
     }
   }
 
-  Future<void> _calcBestMCs(TdDmgResult target) async {
+  Future<void> _calcBestMCs(TdDmgResult target, List<MysticCode>? candidates) async {
     final quest = getQuest();
     final delegate = getDelegate();
 
@@ -472,15 +476,17 @@ class TdDmgSolver {
       }
     }
 
-    final mcs = db.gameData.mysticCodes.values.toList();
+    final mcs = (candidates ?? db.gameData.mysticCodes.values).toList();
     mcs.sort2((e) => e.id);
     for (final (idx, mc) in mcs.indexed) {
       if (idx % 5 == 0) {
-        EasyLoading.showProgress(
-          idx / max(1, mcs.length),
-          status: '$idx / ${mcs.length}',
-          maskType: EasyLoadingMaskType.clear,
-        );
+        if (isEasyLoadingAttached) {
+          EasyLoading.showProgress(
+            idx / max(1, mcs.length),
+            status: '$idx / ${mcs.length}',
+            maskType: EasyLoadingMaskType.clear,
+          );
+        }
         await Future.delayed(const Duration(milliseconds: 5));
       }
       final lv = userMcLevel(mc);
