@@ -110,6 +110,7 @@ class SkillEffect {
     triggerFunc,
     shortenSkill,
     fieldIndividuality,
+    replaceMember,
   ];
 
   static List<SkillEffect> svtIgnores = [
@@ -119,8 +120,10 @@ class SkillEffect {
     SkillEffect.servantFriendshipUp,
     SkillEffect.qpUp,
     SkillEffect.eventDropUp,
+    SkillEffect.replaceMember,
   ];
   static List<SkillEffect> ceIgnores = [
+    SkillEffect.replaceMember,
     SkillEffect.damageNpSP,
     SkillEffect.subStatePositive,
     SkillEffect.shortenSkill,
@@ -344,6 +347,8 @@ class SkillEffect {
     'fieldIndividuality',
     buffTypes: [BuffType.fieldIndividuality, BuffType.toFieldChangeField],
   );
+  // Order Change (mystic code), named explicitly since it isn't in the effect type translations
+  static SkillEffect replaceMember = SkillEffect('Order Change', funcTypes: [FuncType.replaceMember]);
 
   /// 辅助系
   static SkillEffect friendPointUp = SkillEffect(
