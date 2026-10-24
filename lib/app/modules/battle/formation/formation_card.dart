@@ -16,6 +16,9 @@ class FormationCard extends StatelessWidget {
   final int? maxSvtCount;
   final QuestPhase? questPhase;
 
+  /// Optional replacement for the CE "Lv.x ★" label, by slot position (0-5). Return null to keep the default.
+  final String? Function(int position, SvtEquipTarget equipTarget)? ceLabelBuilder;
+
   const FormationCard({
     super.key,
     required this.formation,
@@ -25,6 +28,7 @@ class FormationCard extends StatelessWidget {
     this.showBond = false,
     this.maxSvtCount,
     this.questPhase,
+    this.ceLabelBuilder,
   });
 
   @override
@@ -33,13 +37,14 @@ class FormationCard extends StatelessWidget {
       mainAxisAlignment: MainAxisAlignment.center,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        for (final svt in formation.svts.take(maxSvtCount ?? 6)) _buildServantIcons(context, svt),
+        for (final (index, svt) in formation.svts.take(maxSvtCount ?? 6).indexed)
+          _buildServantIcons(context, svt, index),
         _buildMysticCode(context),
       ],
     );
   }
 
-  Widget _buildServantIcons(BuildContext context, SvtSaveData? storedData) {
+  Widget _buildServantIcons(BuildContext context, SvtSaveData? storedData, int position) {
     String svtInfo = '';
     final svtCollection = storedData?.supportType.isSupport == true ? null : userSvtCollections?[storedData?.svtId];
     if (storedData != null) {
@@ -141,10 +146,10 @@ class FormationCard extends StatelessWidget {
     Widget child = Column(
       children: [
         svtIcon,
-        _buildCeIcon(context, storedData, SvtEquipTarget.normal),
+        _buildCeIcon(context, storedData, SvtEquipTarget.normal, position),
         if (storedData != null && storedData.grandSvt) ...[
-          if ((storedData.equip2?.id ?? 0) != 0) _buildCeIcon(context, storedData, SvtEquipTarget.bond),
-          if ((storedData.equip3?.id ?? 0) != 0) _buildCeIcon(context, storedData, SvtEquipTarget.reward),
+          if ((storedData.equip2?.id ?? 0) != 0) _buildCeIcon(context, storedData, SvtEquipTarget.bond, position),
+          if ((storedData.equip3?.id ?? 0) != 0) _buildCeIcon(context, storedData, SvtEquipTarget.reward, position),
         ],
         if (showBond && bondData != null)
           BondProgress(
@@ -163,7 +168,7 @@ class FormationCard extends StatelessWidget {
     return Flexible(flex: 10, child: child);
   }
 
-  Widget _buildCeIcon(BuildContext context, SvtSaveData? storedData, SvtEquipTarget equipTarget) {
+  Widget _buildCeIcon(BuildContext context, SvtSaveData? storedData, SvtEquipTarget equipTarget, int position) {
     SvtEquipSaveData? equip = switch (equipTarget) {
       SvtEquipTarget.normal => storedData?.equip1,
       SvtEquipTarget.bond => storedData?.equip2,
@@ -174,9 +179,14 @@ class FormationCard extends StatelessWidget {
 
     String ceInfo = "";
     if (equip != null && (equip.id ?? 0) != 0) {
-      ceInfo = ' Lv.${equip.lv}';
-      if (equip.limitBreak) {
-        ceInfo += ' $kStarChar2';
+      final customLabel = ceLabelBuilder?.call(position, equipTarget);
+      if (customLabel != null) {
+        ceInfo = ' $customLabel';
+      } else {
+        ceInfo = ' Lv.${equip.lv}';
+        if (equip.limitBreak) {
+          ceInfo += ' $kStarChar2';
+        }
       }
       ceInfo = ceInfo.padRight(11);
     }

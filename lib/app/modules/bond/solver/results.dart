@@ -10,6 +10,7 @@ import 'package:chaldea/utils/utils.dart';
 import 'package:chaldea/widgets/widgets.dart';
 
 import '../../battle/formation/formation_card.dart';
+import '../formation_bond_calc.dart';
 import 'solver.dart';
 
 /// The card grid shared by the two solver exclusion lists.
@@ -331,13 +332,64 @@ class BondSolverResultsTab extends StatelessWidget {
                   style: Theme.of(context).textTheme.labelLarge,
                 ),
               ),
-              FormationCard(formation: _previewFormation(team), questPhase: quest),
+              Builder(
+                builder: (context) {
+                  final contributions = ceBondContributions(team);
+                  return FormationCard(
+                    formation: _previewFormation(team),
+                    questPhase: quest,
+                    ceLabelBuilder: (position, equipTarget) {
+                      final contribution = contributions[(position, equipTarget)];
+                      if (contribution == null) return null;
+                      final (bond, members) = contribution;
+                      return '${bond >= 0 ? '+' : ''}${bond.format(groupSeparator: ',', compact: false)} ($members)';
+                    },
+                  );
+                },
+              ),
               Padding(padding: const EdgeInsets.fromLTRB(8, 0, 8, 4), child: _bondValues(context, team)),
             ],
           ),
         ),
       ],
     );
+  }
+
+  /// Extra bond each equipped CE adds: (sum over party members, number of members it raises).
+  /// Measured by removing only that CE and recalculating the team, so it matches the totals below.
+  /// Support slots earn no bond and are not counted.
+  @visibleForTesting
+  Map<(int, SvtEquipTarget), (int, int)> ceBondContributions(BondSolvedTeam team) {
+    final quest = this.quest;
+    if (quest == null) return const {};
+    final teamOption = FormationBondOption.fromJson(option.toJson());
+    final applied = team.applyTo(formation, teamOption);
+    final members = [
+      for (final slot in team.slots)
+        if (!slot.isSupport && slot.servantId != null) slot.position,
+    ];
+    final withAll = teamOption.calcResults(quest, applied);
+
+    final contributions = <(int, SvtEquipTarget), (int, int)>{};
+    for (final (position, deck) in applied.svts.indexed) {
+      for (final equipTarget in const [SvtEquipTarget.normal, SvtEquipTarget.reward]) {
+        final equip = deck.getEquip(equipTarget);
+        final ce = equip.ce;
+        if (ce == null) continue;
+        equip.ce = null;
+        final without = teamOption.calcResults(quest, applied);
+        equip.ce = ce;
+        int bond = 0, count = 0;
+        for (final member in members) {
+          final diff = withAll[member].totalBond - without[member].totalBond;
+          if (diff == 0) continue;
+          bond += diff;
+          count += 1;
+        }
+        contributions[(position, equipTarget)] = (bond, count);
+      }
+    }
+    return contributions;
   }
 
   BattleTeamFormation _previewFormation(BondSolvedTeam team) {
