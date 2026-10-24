@@ -1042,8 +1042,9 @@ enum SvtStatusState {
   appendTwo9,
   // appendTwo10,
   append8,
-  append9
+  append9,
   // append10
+  appendAvailable // >=120 coins and <5 appends unlocked
   ;
 
   String get shownName => switch (this) {
@@ -1058,6 +1059,7 @@ enum SvtStatusState {
     append8 => 'A|<9',
     append9 => 'A|≥9',
     // append10 => 'A|≥10',
+    appendAvailable => 'Append Available',
   };
 }
 

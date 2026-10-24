@@ -30,6 +30,18 @@ class ServantFilterPage extends FilterPage<SvtFilterData> {
   @override
   _ServantFilterPageState createState() => _ServantFilterPageState();
 
+  static const int kAppendUnlockCoins = 120;
+
+  /// Has enough servant coins to unlock another append skill, and not all append skills are unlocked yet.
+  static bool _isAppendAvailable(Servant svt, SvtStatus svtStat) {
+    final coinId = svt.coin?.item.id;
+    if (coinId == null) return false;
+    final coins = db.curUser.items[coinId] ?? 0;
+    if (coins < kAppendUnlockCoins) return false;
+    final unlocked = svtStat.cur.appendSkills.where((lv) => lv > 0).length;
+    return unlocked < svtStat.cur.appendSkills.length;
+  }
+
   static bool filter(
     SvtFilterData filterData,
     Servant svt, {
@@ -87,6 +99,7 @@ class ServantFilterPage extends FilterPage<SvtFilterData> {
         minActive == 10 ? SvtStatusState.active10 : (minActive == 9 ? SvtStatusState.active9 : SvtStatusState.active8),
         append2 < 9 ? SvtStatusState.appendTwo8 : SvtStatusState.appendTwo9,
         if (minAppend != -1) minAppend < 9 ? SvtStatusState.append8 : SvtStatusState.append9,
+        if (_isAppendAvailable(svt, svtStat)) SvtStatusState.appendAvailable,
       ];
 
       if (!filterData.curStatus.matchAny(values)) {
@@ -564,6 +577,7 @@ class _ServantFilterPageState extends FilterPageState<SvtFilterData, ServantFilt
                 SvtStatusState.append8,
                 SvtStatusState.append9,
                 // SvtStatusState.append10,
+                SvtStatusState.appendAvailable,
               ],
               values: filterData.curStatus,
               optionBuilder: (v) => Text(v.shownName),
