@@ -968,6 +968,7 @@ class TdDamageOptions {
   // class board & grand graph
   PreferClassBoardDataSource classBoard;
   bool grandSvt;
+  bool commandSpell; // use a Command Spell before NP, triggers class board's Command Spell Excitation
   PreferClassBoardDataSource grandBoard;
   bool get isUseGrandBoard => grandSvt && !grandBoard.isNone;
   BondEquipType equip2Type;
@@ -1016,6 +1017,7 @@ class TdDamageOptions {
     this.usePlayerSvt = PreferPlayerSvtDataSource.none,
     this.classBoard = PreferClassBoardDataSource.none,
     this.grandSvt = false,
+    this.commandSpell = false,
     this.grandBoard = PreferClassBoardDataSource.none,
     this.equip2Type = BondEquipType.none,
     this.equip3 = 0,
