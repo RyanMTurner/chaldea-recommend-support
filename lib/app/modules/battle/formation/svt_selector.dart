@@ -122,7 +122,9 @@ class ServantSelector extends StatelessWidget {
           onTapClear: () {
             playerSvtData
               ..svt = null
-              ..resetAfterSvtChanged();
+              ..resetAfterSvtChanged()
+              // also clear Class Score, otherwise the empty slot keeps the power-up badge
+              ..classBoardData = ClassBoardStatisticsData();
             onChanged();
           },
           iconSize: 16,
