@@ -12,6 +12,7 @@ import 'package:chaldea/utils/utils.dart';
 import 'package:chaldea/widgets/widgets.dart';
 
 import '../../craft_essence/filter.dart';
+import '../../mystic_code/filter.dart';
 import '../../servant/filter.dart';
 import '../simulation/battle_log.dart';
 import '../simulation/recorder.dart';
@@ -34,6 +35,8 @@ class _TdDmgRankingTabState extends State<TdDmgRankingTab> {
   final supportFilterData = SvtFilterData();
   // filter for the Best CE lists
   final ceFilterData = CraftFilterData();
+  // filter for the Best MC lists
+  final mcFilterData = MysticCodeFilterData();
 
   final scrollController = ScrollController();
 
@@ -149,6 +152,7 @@ class _TdDmgRankingTabState extends State<TdDmgRankingTab> {
             solver: widget.solver,
             supportFilterData: supportFilterData,
             ceFilterData: ceFilterData,
+            mcFilterData: mcFilterData,
             onOptionsChanged: widget.onOptionsChanged,
             result: result,
             tab: result.hasInstantDeathSuccess
@@ -220,6 +224,7 @@ class _ResultDetail extends StatefulWidget {
   final TdDmgSolver solver;
   final SvtFilterData supportFilterData;
   final CraftFilterData ceFilterData;
+  final MysticCodeFilterData mcFilterData;
   final VoidCallback? onOptionsChanged;
   final TdDmgResult result;
   final _ParamType? tab;
@@ -228,6 +233,7 @@ class _ResultDetail extends StatefulWidget {
     required this.solver,
     required this.supportFilterData,
     required this.ceFilterData,
+    required this.mcFilterData,
     this.onOptionsChanged,
     required this.result,
     this.tab,
@@ -289,6 +295,7 @@ class _ResultDetailState extends State<_ResultDetail> {
         _BestMcView(
           key: Key('BestMC_${widget.result.hashCode}'),
           solver: widget.solver,
+          filterData: widget.mcFilterData,
           onOptionsChanged: widget.onOptionsChanged,
           result: widget.result,
         ),
@@ -782,9 +789,16 @@ class _BestCeViewState extends State<_BestCeView> {
 
 class _BestMcView extends StatefulWidget {
   final TdDmgSolver solver;
+  final MysticCodeFilterData filterData;
   final VoidCallback? onOptionsChanged;
   final TdDmgResult result;
-  const _BestMcView({super.key, required this.solver, this.onOptionsChanged, required this.result});
+  const _BestMcView({
+    super.key,
+    required this.solver,
+    required this.filterData,
+    this.onOptionsChanged,
+    required this.result,
+  });
 
   @override
   State<_BestMcView> createState() => _BestMcViewState();
@@ -811,6 +825,18 @@ class _BestMcViewState extends State<_BestMcView> {
   }
 
   String _fmt(int v) => v.format(groupSeparator: ",", compact: false);
+
+  void _showFilter() {
+    FilterPage.show(
+      context: context,
+      builder: (context) => MysticCodeFilterPage(
+        filterData: widget.filterData,
+        onChanged: (_) {
+          if (mounted) setState(() {});
+        },
+      ),
+    );
+  }
 
   bool _isSelectedInOptions(TdMcGain gain) {
     final options = widget.solver.options;
@@ -852,22 +878,41 @@ class _BestMcViewState extends State<_BestMcView> {
     final result = widget.result;
     final currentMc = db.gameData.mysticCodes[result.mcBaseMcId];
     final baseDamage = result.mcBaseDamage ?? result.totalDamage;
-    final shown = _showAll ? gains : gains.take(_kCollapsedCount).toList();
+    final filterData = widget.filterData;
+    final filterActive = filterData.groups.any((g) => !g.isEmpty);
+    // "No Mystic Code" row is always kept
+    final filtered = gains.where((e) => e.mc == null || filterData.filter(e.mc!)).toList();
+    final shown = _showAll ? filtered : filtered.take(_kCollapsedCount).toList();
     final mcCount = gains.where((e) => e.mc != null).length;
+    final filteredCount = filtered.where((e) => e.mc != null).length;
 
     List<Widget> children = [
       ListTile(
         dense: true,
         title: Text('Baseline ${S.current.damage}: ${_fmt(baseDamage)}'),
         subtitle: Text(
-          currentMc == null
-              ? 'No Mystic Code selected. Each Mystic Code ($mcCount) used at your level (Lv.10 if not recorded).'
-              : 'Current: ${currentMc.lName.l} (Lv.${result.mcBaseLv}). Numbers show replacing it with each '
-                    'Mystic Code ($mcCount) at your level (Lv.10 if not recorded).',
+          (currentMc == null
+                  ? 'No Mystic Code selected. Each Mystic Code ($mcCount) used at your level (Lv.10 if not recorded).'
+                  : 'Current: ${currentMc.lName.l} (Lv.${result.mcBaseLv}). Numbers show replacing it with each '
+                        'Mystic Code ($mcCount) at your level (Lv.10 if not recorded).') +
+              (filterActive ? '\nFiltered: $filteredCount / $mcCount Mystic Codes shown.' : ''),
         ),
-        trailing: IconButton(tooltip: 'Recalculate', onPressed: _calculate, icon: const Icon(Icons.refresh)),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              tooltip: S.current.filter,
+              onPressed: _showFilter,
+              icon: Icon(Icons.filter_alt, color: filterActive ? theme.colorScheme.primary : null),
+            ),
+            IconButton(tooltip: 'Recalculate', onPressed: _calculate, icon: const Icon(Icons.refresh)),
+          ],
+        ),
       ),
     ];
+    if (filterActive && filteredCount == 0) {
+      children.add(const Padding(padding: EdgeInsets.all(8), child: Text('No Mystic Code matches the filter.')));
+    }
     for (final (index, gain) in shown.indexed) {
       final mc = gain.mc;
       final percent = baseDamage > 0 ? gain.gain / baseDamage * 100 : 0.0;
@@ -920,11 +965,11 @@ class _BestMcViewState extends State<_BestMcView> {
         ),
       );
     }
-    if (gains.length > _kCollapsedCount) {
+    if (filtered.length > _kCollapsedCount) {
       children.add(
         TextButton(
           onPressed: () => setState(() => _showAll = !_showAll),
-          child: Text(_showAll ? 'Show top $_kCollapsedCount' : 'Show all (${gains.length})'),
+          child: Text(_showAll ? 'Show top $_kCollapsedCount' : 'Show all (${filtered.length})'),
         ),
       );
     }
