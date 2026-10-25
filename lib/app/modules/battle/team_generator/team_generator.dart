@@ -41,6 +41,7 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
   TeamGeneratorSolver? _solver;
   int _simulations = 0;
   int _elapsedMs = 0;
+  bool _paused = false;
 
   bool get solving => _solver != null;
 
@@ -85,9 +86,19 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
           });
         }
       },
+      onPaused: (simulations, elapsed) {
+        if (mounted) {
+          setState(() {
+            _paused = true;
+            _simulations = simulations;
+            _elapsedMs = elapsed;
+          });
+        }
+      },
     );
     setState(() {
       _solver = solver;
+      _paused = false;
       _simulations = 0;
       _elapsedMs = 0;
       state.result = null;
@@ -102,6 +113,7 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
     if (!mounted) return;
     setState(() {
       _solver = null;
+      _paused = false;
       state
         ..result = result
         ..resultQuest = quest
@@ -145,12 +157,39 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
                 state.settings.timeLimitSeconds,
                 1,
                 (v) => state.settings.timeLimitSeconds = v,
+                enabled: !solving || _paused, // also sets how much "Add more time" adds
               ),
             ],
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: solving
+            child: solving && _paused
+                ? Column(
+                    children: [
+                      Text(
+                        'No plan found within ${_solver?.timeLimitSeconds}s '
+                        '($_simulations turns simulated). The search is paused where it stopped.',
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        spacing: 8,
+                        children: [
+                          FilledButton.icon(
+                            onPressed: () {
+                              setState(() => _paused = false);
+                              _solver?.addTime(state.settings.timeLimitSeconds);
+                            },
+                            icon: const Icon(Icons.more_time),
+                            label: Text('Add more time (+${state.settings.timeLimitSeconds}s)'),
+                          ),
+                          TextButton(onPressed: () => _solver?.cancel(), child: const Text('Stop')),
+                        ],
+                      ),
+                    ],
+                  )
+                : solving
                 ? Column(
                     children: [
                       const LinearProgressIndicator(),
@@ -171,12 +210,14 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
     );
   }
 
-  Widget _numberTile(String title, int value, int min, void Function(int) update) {
+  Widget _numberTile(String title, int value, int min, void Function(int) update, {bool? enabled}) {
     return ListTile(
       dense: true,
       title: Text(title),
       trailing: TextButton(
-        onPressed: solving ? null : () => _editNumber(title: title, initial: value, min: min, update: update),
+        onPressed: (enabled ?? !solving)
+            ? () => _editNumber(title: title, initial: value, min: min, update: update)
+            : null,
         child: Text('≤$value'),
       ),
     );

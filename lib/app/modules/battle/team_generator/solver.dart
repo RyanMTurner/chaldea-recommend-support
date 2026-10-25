@@ -106,10 +106,50 @@ class TeamGeneratorSolver {
   final TeamGeneratorSettings settings;
   final void Function(int simulations, int elapsedMilliseconds)? onProgress;
 
-  TeamGeneratorSolver({required this.quest, required this.formation, required this.settings, this.onProgress});
+  /// Called when the time limit is reached; the search waits (state kept) until [addTime] or [cancel].
+  final void Function(int simulations, int elapsedMilliseconds)? onPaused;
+
+  TeamGeneratorSolver({
+    required this.quest,
+    required this.formation,
+    required this.settings,
+    this.onProgress,
+    this.onPaused,
+  }) : _timeLimitSeconds = settings.timeLimitSeconds;
 
   bool _cancelled = false;
-  void cancel() => _cancelled = true;
+  void cancel() {
+    _cancelled = true;
+    _pause?.complete(false);
+  }
+
+  /// Current time limit; grows with [addTime].
+  int _timeLimitSeconds;
+  int get timeLimitSeconds => _timeLimitSeconds;
+  bool _reachedTimeLimit = false;
+  Completer<bool>? _pause;
+  bool get isPaused => _pause != null;
+
+  /// Give a paused search more time; it continues from the branch where it stopped.
+  void addTime(int seconds) {
+    _timeLimitSeconds += seconds;
+    _pause?.complete(true);
+  }
+
+  /// At the time limit, wait for the user. Returns false if the search should stop.
+  Future<bool> _continueAfterTimeLimit() async {
+    if (_cancelled) return false;
+    if (_watch.elapsed.inSeconds < _timeLimitSeconds) return true;
+    _reachedTimeLimit = true;
+    _watch.stop();
+    final pause = _pause = Completer<bool>();
+    onPaused?.call(simulations, _watch.elapsedMilliseconds);
+    final resume = await pause.future;
+    _pause = null;
+    if (!resume || _cancelled) return false;
+    _watch.start();
+    return _watch.elapsed.inSeconds < _timeLimitSeconds || await _continueAfterTimeLimit();
+  }
 
   final Stopwatch _watch = Stopwatch();
   int simulations = 0;
@@ -118,7 +158,6 @@ class TeamGeneratorSolver {
   /// Swap the battle engine performs on the next Order Change.
   TgOrderChange? _pendingSwap;
 
-  bool get _timedOut => _watch.elapsed.inSeconds >= settings.timeLimitSeconds;
 
   Future<TeamGeneratorResult> solve() async {
     _watch
@@ -151,8 +190,8 @@ class TeamGeneratorSolver {
     if (found) {
       return _result(true, 'Cleared in ${plans.length} turn(s).', turns: plans, battle: battle);
     }
+    if (_reachedTimeLimit && _cancelled) return _result(false, 'No plan found within ${_timeLimitSeconds}s.');
     if (_cancelled) return _result(false, 'Cancelled.');
-    if (_timedOut) return _result(false, 'No plan found within ${settings.timeLimitSeconds}s.');
     return _result(false, 'No plan clears the quest within ${settings.maxTurns} turn(s).');
   }
 
@@ -169,7 +208,7 @@ class TeamGeneratorSolver {
 
   Future<bool> _search(BattleData battle, List<TgTurnPlan> plans, int csUsed) async {
     if (battle.isBattleWin) return true;
-    if (battle.nonnullPlayers.isEmpty || _cancelled || _timedOut) return false;
+    if (battle.nonnullPlayers.isEmpty || !await _continueAfterTimeLimit()) return false;
 
     final remainingTurns = settings.maxTurns - plans.length;
     final remainingWaves = _totalWaves - battle.waveCount + 1;
@@ -217,7 +256,7 @@ class TeamGeneratorSolver {
             onProgress?.call(simulations, _watch.elapsedMilliseconds);
             await Future.delayed(Duration.zero); // keep the UI responsive
           }
-          if (_cancelled || _timedOut) return false;
+          if (!await _continueAfterTimeLimit()) return false;
         }
       }
     }

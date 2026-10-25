@@ -2,6 +2,7 @@
 //  15. Team Generator: find a skill / Command Spell / NP plan that clears a quest with a fixed team
 //  16. Team Generator: Order Change (mystic code) support
 //  17. Team Generator: the incoming servant may save skills for later turns
+//  18. Team Generator: pause at the time limit, "Add more time" continues the same search
 //
 // Run: flutter test test/fork --dart-define=APP_PATH=/path/to/app/data
 import 'package:flutter_test/flutter_test.dart';
@@ -168,6 +169,44 @@ void main() async {
       final command = FgaCommandExporter(result.battle!.recorder.records).export();
       expect(command, contains('x${first.orderChange!.onField + 1}1'));
       expect(result.battle!.replayDataRecord.replaceMemberIndexes, isNotEmpty, reason: 'replay data has the swap');
+    });
+  });
+
+  group('Time limit', () {
+    test('pauses at the limit and continues where it stopped after adding time', () async {
+      int pauses = 0;
+      int simulationsAtPause = -1;
+      late TeamGeneratorSolver solver;
+      solver = TeamGeneratorSolver(
+        quest: quest,
+        formation: altriaTeam(),
+        settings: TeamGeneratorSettings(maxTurns: waves, maxCommandSpells: 3, timeLimitSeconds: 0),
+        onPaused: (simulations, _) {
+          pauses++;
+          simulationsAtPause = simulations;
+          expect(solver.isPaused, isTrue);
+          Future.microtask(() => solver.addTime(60));
+        },
+      );
+      final result = await solver.solve();
+      expect(pauses, 1, reason: '0s limit pauses once, then 60s is plenty');
+      expect(simulationsAtPause, 0, reason: 'paused before the first simulation');
+      expect(solver.timeLimitSeconds, 60);
+      expect(result.success, isTrue, reason: result.message);
+      expect(solver.isPaused, isFalse);
+    });
+
+    test('Stop while paused ends without a plan', () async {
+      late TeamGeneratorSolver solver;
+      solver = TeamGeneratorSolver(
+        quest: quest,
+        formation: altriaTeam(),
+        settings: TeamGeneratorSettings(maxTurns: waves, maxCommandSpells: 3, timeLimitSeconds: 0),
+        onPaused: (_, _) => Future.microtask(solver.cancel),
+      );
+      final result = await solver.solve();
+      expect(result.success, isFalse);
+      expect(result.message, contains('No plan found within 0s'));
     });
   });
 }
