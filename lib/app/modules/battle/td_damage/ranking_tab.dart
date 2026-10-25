@@ -477,6 +477,23 @@ class _BestSupportsViewState extends State<_BestSupportsView> {
     final filtered = gains.where((e) => ServantFilterPage.filter(filterData, e.support)).toList();
     final positive = filtered.where((e) => e.gain > 0).toList();
     final shown = _showAll ? positive : positive.take(_kCollapsedCount).toList();
+    // each support's own NP result, taken from the existing damage list (best variant)
+    final Map<int, TdDmgResult> ownNpResult = {};
+    for (final result in widget.solver.results) {
+      if (result.totalDamage <= 0) continue;
+      final prev = ownNpResult[result.svt.id];
+      if (prev == null || result.totalDamage > prev.totalDamage) ownNpResult[result.svt.id] = result;
+    }
+    String ownNpText(Servant svt) {
+      final result = ownNpResult[svt.id];
+      if (result == null) return '';
+      final type = switch (result.originalSvtData.td?.damageType) {
+        TdEffectFlag.attackEnemyAll => ' AOE',
+        TdEffectFlag.attackEnemyOne => ' ST',
+        _ => '',
+      };
+      return '${_fmt(result.totalDamage)}$type\nif dual core';
+    }
 
     List<Widget> children = [
       ListTile(
@@ -526,6 +543,15 @@ class _BestSupportsViewState extends State<_BestSupportsView> {
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              Tooltip(
+                message: 'Own NP damage (from the damage list)',
+                child: Text(
+                  ownNpText(gain.support),
+                  textAlign: TextAlign.end,
+                  style: theme.textTheme.bodySmall,
+                ),
+              ),
+              const SizedBox(width: 16),
               Text(
                 '+${_fmt(gain.gain)}\n+${percent.toStringAsFixed(1)}%',
                 textAlign: TextAlign.end,
