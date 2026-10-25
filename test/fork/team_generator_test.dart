@@ -4,6 +4,8 @@
 //  17. Team Generator: the incoming servant may save skills for later turns
 //  18. Team Generator: pause at the time limit, "Add more time" continues the same search
 //  19. Team Generator: parallel search on worker isolates
+//  20. Team Generator: single-ally skill targets are searched (1-turn buffs stay on the attacker),
+//      any number of skills may stay unused
 //
 // Run: flutter test test/fork --dart-define=APP_PATH=/path/to/app/data
 import 'package:flutter_test/flutter_test.dart';
@@ -280,6 +282,63 @@ void main() async {
       } finally {
         await TeamGeneratorWorkerPool.disposeCurrent();
       }
+    });
+  });
+
+  group('Targets and unused skills', () {
+    bool singleAlly(NiceFunction f) =>
+        f.funcTargetTeam != FuncApplyTarget.enemy && f.funcTargetType.needNormalOneTarget;
+    bool npCharge(NiceFunction f) => f.funcType.name.startsWith('gainNp');
+
+    /// first servant active skill whose single-ally functions match [test]
+    NiceSkill? findSkill(bool Function(List<NiceFunction> funcs) test) {
+      for (final svt in db.gameData.servantsNoDup.values) {
+        for (final skill in svt.skills) {
+          final funcs = skill.functions.where(singleAlly).toList();
+          if (funcs.isNotEmpty && test(funcs)) return skill;
+        }
+      }
+      return null;
+    }
+
+    test('NP charge may target anyone', () {
+      final skill = findSkill((funcs) => funcs.any(npCharge));
+      expect(skill, isNotNull);
+      expect(TeamGeneratorSolver.mayTargetAnyAlly(skill!), isTrue);
+    });
+
+    test('1-turn buffs only (no NP charge) stay on the attacker', () {
+      final skill = findSkill(
+        (funcs) => !funcs.any(npCharge) && funcs.every((f) => f.buffs.isNotEmpty && f.svals.firstOrNull?.Turn == 1),
+      );
+      expect(skill, isNotNull);
+      expect(TeamGeneratorSolver.mayTargetAnyAlly(skill!), isFalse);
+    });
+
+    test('buffs lasting longer than 1 turn may target anyone', () {
+      final skill = findSkill(
+        (funcs) =>
+            !funcs.any(npCharge) && funcs.any((f) => f.buffs.isNotEmpty && (f.svals.firstOrNull?.Turn ?? 0) >= 3),
+      );
+      expect(skill, isNotNull);
+      expect(TeamGeneratorSolver.mayTargetAnyAlly(skill!), isTrue);
+    });
+
+    test('skills without a single-ally effect have no target choice', () {
+      final skill = db.gameData.servantsById[kAltria]!.skills.firstWhere(
+        (skill) => !skill.functions.any(singleAlly),
+      );
+      expect(TeamGeneratorSolver.mayTargetAnyAlly(skill), isFalse);
+    });
+
+    test('the default plan (every skill used) is still found first when it works', () async {
+      final result = await TeamGeneratorSolver(
+        quest: quest,
+        formation: altriaTeam(),
+        settings: TeamGeneratorSettings(maxTurns: waves, maxCommandSpells: 3, timeLimitSeconds: 60, workers: 0),
+      ).solve();
+      expect(result.success, isTrue, reason: result.message);
+      expect(result.turns.first.steps.any((step) => step.startsWith('Not used')), isFalse);
     });
   });
 }

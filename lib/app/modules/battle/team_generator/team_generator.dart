@@ -64,7 +64,12 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
     });
   }
 
-  void _editNumber({required String title, required int initial, required int min, required void Function(int) update}) {
+  void _editNumber({
+    required String title,
+    required int initial,
+    required int min,
+    required void Function(int) update,
+  }) {
     InputCancelOkDialog.number(
       title: title,
       initValue: initial,
@@ -385,7 +390,8 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
     }
     if (phase == null || !quest.phases.contains(phase)) return;
     final questPhase =
-        db.gameData.getQuestPhase(quest.id, phase) ?? await showEasyLoading(() => AtlasApi.questPhase(quest.id, phase!));
+        db.gameData.getQuestPhase(quest.id, phase) ??
+        await showEasyLoading(() => AtlasApi.questPhase(quest.id, phase!));
     if (!mounted) return;
     if (questPhase == null) {
       EasyLoading.showError(S.current.not_found);
