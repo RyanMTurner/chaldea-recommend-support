@@ -11,6 +11,7 @@ import 'package:chaldea/app/battle/utils/battle_logger.dart';
 import 'package:chaldea/models/models.dart';
 import 'package:chaldea/packages/logger.dart';
 import 'package:chaldea/utils/utils.dart';
+import 'td_workers.dart';
 
 // (ATK * 0.23 * 宝具伤害倍率 * 指令卡伤害倍率
 //  * (1 ± 指令卡性能BUFF ∓ 指令卡耐性)
@@ -137,10 +138,46 @@ class TdDmgSolver {
     }
   }
 
+  /// Worker isolates to use (the "CPU Cores" option); 0 = calculate on the UI thread.
+  int get workerCount => kIsWeb ? 0 : max(0, options.cores);
+
+  /// Runs [parallel] on workers; on failure (workers can't start) falls back to the UI thread.
+  Future<bool> _tryParallel(String what, Future<void> Function() parallel) async {
+    if (workerCount <= 0) return false;
+    try {
+      await parallel();
+      return true;
+    } catch (e, s) {
+      logger.e('$what: worker threads failed, using the main thread', e, s);
+      tryEasyLoading(() => EasyLoading.showToast('Worker threads unavailable, using the main thread'));
+      return false;
+    }
+  }
+
+  static void reportProgress(int done, int total, void Function(int done, int total)? onProgress) {
+    if (onProgress != null) {
+      onProgress(done, total);
+    } else if (isEasyLoadingAttached) {
+      EasyLoading.showProgress(
+        total <= 0 ? 0 : done / total,
+        status: '$done / $total',
+        maskType: EasyLoadingMaskType.clear,
+      );
+    }
+  }
+
   Future<void> _calculate() async {
     results.clear();
     errors.clear();
     final servants = getServantList();
+    if (await _tryParallel('NP damage', () => calculateRankingParallel(this, servants))) return;
+    results.clear();
+    errors.clear();
+    await calculateServants(servants);
+  }
+
+  /// Damage results of [servants], appended to [results] and [errors].
+  Future<void> calculateServants(List<Servant> servants, {void Function(int done, int total)? onProgress}) async {
     final quest = getQuest();
     final mcData = getMysticCodeData();
     final delegate = getDelegate();
@@ -150,11 +187,7 @@ class TdDmgSolver {
       try {
         final List<int> limitsToAdd = [];
         if (!options.simpleMode || idx % 17 == 0) {
-          EasyLoading.showProgress(
-            idx / servants.length,
-            status: '$idx / ${servants.length}',
-            maskType: EasyLoadingMaskType.clear,
-          );
+          reportProgress(idx, servants.length, onProgress);
           await Future.delayed(const Duration(milliseconds: 5));
         }
 
@@ -267,11 +300,18 @@ class TdDmgSolver {
   /// For the attacker of [target], try every playable servant as an additional support
   /// (on top of the supports already set in options) and rank them by damage increase.
   /// Results are stored in [target.supportGains].
-  Future<void> calcBestSupports(TdDmgResult target, {List<Servant>? candidates}) async {
+  Future<void> calcBestSupports(
+    TdDmgResult target, {
+    List<Servant>? candidates,
+    void Function(int done, int total)? onProgress,
+  }) async {
     if (running.value) return;
     try {
       running.value = true;
-      await _calcBestSupports(target, candidates);
+      final parallel = candidates == null && onProgress == null
+          ? await _tryParallel('Best Supports', () => calcBestSupportsParallel(this, target))
+          : false;
+      if (!parallel) await _calcBestSupports(target, candidates, onProgress);
       await tryEasyLoading(() => EasyLoading.dismiss());
     } catch (e, s) {
       tryEasyLoading(() => EasyLoading.showError(e.toString()));
@@ -281,7 +321,11 @@ class TdDmgSolver {
     }
   }
 
-  Future<void> _calcBestSupports(TdDmgResult target, List<Servant>? candidates) async {
+  Future<void> _calcBestSupports(
+    TdDmgResult target,
+    List<Servant>? candidates,
+    void Function(int done, int total)? onProgress,
+  ) async {
     final quest = getQuest();
     final mcData = getMysticCodeData();
     final delegate = getDelegate();
@@ -295,13 +339,7 @@ class TdDmgSolver {
     final List<String> supportErrors = [];
     for (final (idx, svt) in servants.indexed) {
       if (idx % 10 == 0) {
-        if (isEasyLoadingAttached) {
-          EasyLoading.showProgress(
-            idx / servants.length,
-            status: '$idx / ${servants.length}',
-            maskType: EasyLoadingMaskType.clear,
-          );
-        }
+        reportProgress(idx, servants.length, onProgress);
         await Future.delayed(const Duration(milliseconds: 5));
       }
       try {
@@ -327,13 +365,32 @@ class TdDmgSolver {
       ..supportErrors = supportErrors;
   }
 
+  /// Owned craft essences (no EXP cards) from [source] (default: all), by collection number.
+  static List<CraftEssence> ownedCeCandidates([Iterable<CraftEssence>? source]) {
+    final ces = (source ?? db.gameData.craftEssences.values).where((ce) {
+      if (ce.collectionNo <= 0) return false;
+      if (ce.flags.contains(SvtFlag.svtEquipExp)) return false;
+      return ce.status.status == CraftStatus.owned;
+    }).toList();
+    ces.sort2((e) => e.collectionNo);
+    return ces;
+  }
+
   /// Try every owned craft essence (at its owned level / limit break) in place of the CE set in options.
   /// Gains are relative to the current options (selected CE, or no CE). Results are stored in [target.ceGains].
-  Future<void> calcBestCEs(TdDmgResult target, {List<CraftEssence>? candidates}) async {
+  Future<void> calcBestCEs(
+    TdDmgResult target, {
+    List<CraftEssence>? candidates,
+    void Function(int done, int total)? onProgress,
+    bool includeNoCe = true,
+  }) async {
     if (running.value) return;
     try {
       running.value = true;
-      await _calcBestCEs(target, candidates);
+      final parallel = candidates == null && onProgress == null
+          ? await _tryParallel('Best CE', () => calcBestCEsParallel(this, target))
+          : false;
+      if (!parallel) await _calcBestCEs(target, candidates, onProgress, includeNoCe);
       await tryEasyLoading(() => EasyLoading.dismiss());
     } catch (e, s) {
       tryEasyLoading(() => EasyLoading.showError(e.toString()));
@@ -343,7 +400,12 @@ class TdDmgSolver {
     }
   }
 
-  Future<void> _calcBestCEs(TdDmgResult target, List<CraftEssence>? candidates) async {
+  Future<void> _calcBestCEs(
+    TdDmgResult target,
+    List<CraftEssence>? candidates,
+    void Function(int done, int total)? onProgress,
+    bool includeNoCe,
+  ) async {
     final quest = getQuest();
     final mcData = getMysticCodeData();
     final delegate = getDelegate();
@@ -356,7 +418,7 @@ class TdDmgSolver {
     final List<String> ceErrors = [];
 
     // with a CE selected, also show what removing it would do
-    if (currentCe != null) {
+    if (currentCe != null && includeNoCe) {
       final result = await calcOneSvt(target.originalSvtData, quest, mcData, delegate, equip1: SvtEquipData());
       if (result != null) {
         gains.add(
@@ -373,22 +435,11 @@ class TdDmgSolver {
       }
     }
 
-    final ces = (candidates ?? db.gameData.craftEssences.values).where((ce) {
-      if (ce.collectionNo <= 0) return false;
-      if (ce.flags.contains(SvtFlag.svtEquipExp)) return false;
-      return ce.status.status == CraftStatus.owned;
-    }).toList();
-    ces.sort2((e) => e.collectionNo);
+    final ces = ownedCeCandidates(candidates);
 
     for (final (idx, ce) in ces.indexed) {
       if (idx % 10 == 0) {
-        if (isEasyLoadingAttached) {
-          EasyLoading.showProgress(
-            idx / max(1, ces.length),
-            status: '$idx / ${ces.length}',
-            maskType: EasyLoadingMaskType.clear,
-          );
-        }
+        reportProgress(idx, ces.length, onProgress);
         await Future.delayed(const Duration(milliseconds: 5));
       }
       final status = ce.status;

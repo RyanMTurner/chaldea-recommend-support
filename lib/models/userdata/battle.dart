@@ -1,5 +1,8 @@
 import 'dart:convert';
-import 'dart:math' show max;
+import 'dart:io' show Platform;
+import 'dart:math' show max, min;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import 'package:archive/archive.dart';
 
@@ -1012,6 +1015,12 @@ class TdDamageOptions {
   bool damageNpHpRatioMax;
   bool simpleMode;
 
+  /// Worker threads for the calculation (damage list, Best Supports, Best CE); 0 = UI thread.
+  int cores;
+
+  /// CPU cores - 1, at least 1 and at most 4 (each worker holds a copy of the game data). 0 on web.
+  static int get defaultCores => kIsWeb ? 0 : max(1, min(4, Platform.numberOfProcessors - 1));
+
   TdDamageOptions({
     QuestEnemy? enemy,
     List<int>? supports,
@@ -1053,7 +1062,9 @@ class TdDamageOptions {
     this.damageNpIndivSumCount,
     this.damageNpHpRatioMax = false,
     this.simpleMode = true,
-  }) : enemy = enemy ?? QuestEnemy.blankEnemy(),
+    int? cores,
+  }) : cores = cores ?? defaultCores,
+       enemy = enemy ?? QuestEnemy.blankEnemy(),
        supports = supports ?? [],
        appendSkills = List.generate(kAppendSkillNums.length, (i) => appendSkills?.getOrNull(i) ?? false),
        extraBuffs = extraBuffs ?? CustomSkillData(buffOnly: true, hasTurnCount: false),
