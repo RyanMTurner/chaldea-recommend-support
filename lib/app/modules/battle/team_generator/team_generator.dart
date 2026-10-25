@@ -189,7 +189,6 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
       dense: true,
       leading: mc?.iconBuilder(context: context, width: 36, jumpToDetail: false) ?? const Icon(Icons.block),
       title: Text(mc?.lName.l ?? S.current.select),
-      subtitle: mc == null ? null : const Text('Order Change skills are not used yet'),
       onTap: () {
         router.pushPage(
           MysticCodeListPage(
@@ -289,8 +288,6 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
     final theme = Theme.of(context);
     final battle = result.battle;
     final command = battle == null ? '' : FgaCommandExporter(battle.recorder.records).export();
-    final formation = state.resultFormation;
-    String svtName(int slot) => formation?.svts.getOrNull(slot)?.svt?.lName.l ?? 'Slot ${slot + 1}';
 
     return TileGroup(
       header: 'Plan',
@@ -311,17 +308,7 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
           ListTile(
             dense: true,
             title: Text('${S.current.battle_turn} ${index + 1} · ${S.current.quest_wave} ${turn.wave}'),
-            subtitle: Text(
-              [
-                for (final (skill, target) in turn.skills)
-                  '${skill.isMysticCode ? skill.name : '${svtName(skill.slot!)} S${skill.skillIndex + 1}'}'
-                      '${target == null ? '' : ' → ${svtName(target)}'}',
-                for (final target in turn.commandSpellTargets) '${S.current.command_spell} → ${svtName(target)}',
-                turn.npSlots.isEmpty
-                    ? 'No NP (charge turn)'
-                    : 'NP: ${turn.npSlots.map(svtName).join(', ')}',
-              ].join('\n'),
-            ),
+            subtitle: Text(turn.steps.join('\n')),
           ),
         if (result.success && battle != null) ...[
           ListTile(
