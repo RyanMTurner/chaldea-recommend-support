@@ -4,6 +4,7 @@
 // Run: flutter test test/fork --dart-define=APP_PATH=/path/to/app/data
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:chaldea/models/gamedata/effect.dart';
 import 'package:chaldea/models/models.dart';
 
 import '../test_init.dart';
