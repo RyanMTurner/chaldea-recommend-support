@@ -560,26 +560,44 @@ class _TdDmgOptionsTabState extends State<TdDmgOptionsTab> {
           });
         },
       ),
+      CheckboxListTile(
+        dense: true,
+        value: options.playerAppend,
+        title: const Text("Player's Append"),
+        subtitle: const Text('Use each servant\'s own append skill levels instead of the toggles below'),
+        onChanged: (value) {
+          setState(() {
+            options.playerAppend = value ?? false;
+          });
+        },
+      ),
       ListTile(
         dense: true,
+        enabled: !options.playerAppend,
         title: Text(S.current.append_skill),
-        trailing: FilterGroup<int>(
-          combined: true,
-          padding: EdgeInsets.zero,
-          options: List.generate(options.appendSkills.length, (i) => i),
-          optionBuilder: (value) => Text(options.appendSkills[value] ? '10' : 'x'),
-          values: FilterGroupData(
-            options: {
-              for (final (index, enabled) in options.appendSkills.indexed)
-                if (enabled) index,
-            },
+        trailing: IgnorePointer(
+          ignoring: options.playerAppend,
+          child: Opacity(
+            opacity: options.playerAppend ? 0.4 : 1,
+            child: FilterGroup<int>(
+              combined: true,
+              padding: EdgeInsets.zero,
+              options: List.generate(options.appendSkills.length, (i) => i),
+              optionBuilder: (value) => Text(options.appendSkills[value] ? '10' : 'x'),
+              values: FilterGroupData(
+                options: {
+                  for (final (index, enabled) in options.appendSkills.indexed)
+                    if (enabled) index,
+                },
+              ),
+              onFilterChanged: (v, lastChanged) {
+                for (int index = 0; index < options.appendSkills.length; index++) {
+                  options.appendSkills[index] = v.options.contains(index);
+                }
+                setState(() {});
+              },
+            ),
           ),
-          onFilterChanged: (v, lastChanged) {
-            for (int index = 0; index < options.appendSkills.length; index++) {
-              options.appendSkills[index] = v.options.contains(index);
-            }
-            setState(() {});
-          },
         ),
       ),
       kIndentDivider,

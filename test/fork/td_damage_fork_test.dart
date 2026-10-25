@@ -5,6 +5,7 @@
 //   5. Command Spell calculator option
 //   8. Grand Servant option: Disabled / Current / Max
 //   9. "Battle Sim" button: send attacker + supports + MC to the Battle Simulation team
+//  13. "Player's Append" option: the calc uses each servant's own append levels
 //
 // Run: flutter test test/fork --dart-define=APP_PATH=/path/to/app/data
 import 'dart:convert';
@@ -328,6 +329,34 @@ void main() async {
       expect(formation.mysticCode.level, 7);
     });
 
+    test('append skills: own levels with player data, calc toggles stay Lv.10', () async {
+      final altria = db.gameData.servantsById[kAltria]!;
+      final cur = altria.status.cur;
+      final saved = (cur.favorite, cur.appendSkills.toList());
+      try {
+        cur
+          ..favorite = true
+          ..appendSkills = [0, 10, 0, 5, 0];
+        options.appendSkills = [true, false, false, false, false];
+        final solver = TdDmgSolver();
+
+        options.usePlayerSvt = PreferPlayerSvtDataSource.none;
+        var target = await calcAttacker(solver, kAltria);
+        var formation = buildBattleSimFormation(solver, target, BattleTeamFormation());
+        expect(formation.svts[0]?.appendLvs, [10, 0, 0, 0, 0], reason: 'no player data: calc toggles only');
+
+        options.usePlayerSvt = PreferPlayerSvtDataSource.current;
+        target = await calcAttacker(solver, kAltria);
+        expect(target.originalSvtData.appendLvs, [10, 0, 0, 0, 0], reason: 'the calc itself uses its toggles');
+        formation = buildBattleSimFormation(solver, target, BattleTeamFormation());
+        expect(formation.svts[0]?.appendLvs, [10, 10, 0, 5, 0], reason: 'own appends + forced Lv.10');
+      } finally {
+        cur
+          ..favorite = saved.$1
+          ..appendSkills = saved.$2;
+      }
+    });
+
     test('no MC in the calc keeps the team MC', () async {
       options.mcId = null;
       final solver = TdDmgSolver();
@@ -341,6 +370,58 @@ void main() async {
       expect(formation.svts.skip(1).every((e) => e == null), isTrue);
       expect(formation.mysticCode.mysticCodeId, 130);
       expect(formation.mysticCode.level, 9);
+    });
+  });
+
+  group("Player's Append option", () {
+    final altria = db.gameData.servantsById[kAltria]!;
+    late (bool, List<int>) saved;
+    setUp(() {
+      final cur = altria.status.cur;
+      saved = (cur.favorite, cur.appendSkills.toList());
+      cur
+        ..favorite = true
+        ..appendSkills = [0, 10, 0, 5, 0];
+    });
+    tearDown(() {
+      altria.status.cur
+        ..favorite = saved.$1
+        ..appendSkills = saved.$2;
+    });
+
+    test('off: append toggles decide', () {
+      options
+        ..playerAppend = false
+        ..appendSkills = [true, false, false, false, false];
+      expect(TdDmgSolver().getSvtData(altria, 4)!.appendLvs, [10, 0, 0, 0, 0]);
+    });
+
+    test('on: player values, toggles ignored, with or without player data', () {
+      options
+        ..playerAppend = true
+        ..appendSkills = [true, true, true, true, true];
+      for (final source in [PreferPlayerSvtDataSource.none, PreferPlayerSvtDataSource.current]) {
+        options.usePlayerSvt = source;
+        expect(TdDmgSolver().getSvtData(altria, 4)!.appendLvs, [0, 10, 0, 5, 0], reason: source.name);
+      }
+    });
+
+    test('changes the calculated damage when an append matters', () async {
+      options.appendSkills = [false, false, false, false, false];
+      options.playerAppend = false;
+      final solver = TdDmgSolver();
+      final off = await calcAttacker(solver, kAltria);
+      altria.status.cur.appendSkills = [0, 0, 10, 0, 0]; // Append 3: anti-class damage, Lv.10
+      options.playerAppend = true;
+      final on = await calcAttacker(solver, kAltria);
+      expect(on.originalSvtData.appendLvs, [0, 0, 10, 0, 0]);
+      expect(on.totalDamage, greaterThanOrEqualTo(off.totalDamage));
+    });
+
+    test('saved with the NP damage settings, off by default', () {
+      TdDamageOptions roundTrip(TdDamageOptions o) => TdDamageOptions.fromJson(jsonDecode(jsonEncode(o.toJson())));
+      expect(roundTrip(TdDamageOptions()).playerAppend, isFalse);
+      expect(roundTrip(TdDamageOptions()..playerAppend = true).playerAppend, isTrue);
     });
   });
 }

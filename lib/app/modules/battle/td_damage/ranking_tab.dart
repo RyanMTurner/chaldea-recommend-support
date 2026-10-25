@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter_easyloading/flutter_easyloading.dart';
 
 import 'package:chaldea/app/app.dart';
@@ -1017,6 +1019,18 @@ BattleTeamFormation buildBattleSimFormation(TdDmgSolver solver, TdDmgResult resu
   attacker.customPassiveLvs.clear();
   if (!options.enableActiveSkills) {
     attacker.updateRankUps(region: options.region); // calc removed skills, restore them
+  }
+  // The calc replaces append levels with its Append Skill toggles (on = Lv.10, off = none).
+  // With player data, give the servant its own appends; appends forced on by the calc stay Lv.10.
+  final attackerSvt = attacker.svt;
+  if (attackerSvt != null && options.usePlayerSvt != PreferPlayerSvtDataSource.none) {
+    final plan = options.usePlayerSvt == PreferPlayerSvtDataSource.current
+        ? attackerSvt.status.cur
+        : attackerSvt.curPlan;
+    attacker.appendLvs = [
+      for (int index = 0; index < attacker.appendLvs.length; index++)
+        max(attacker.appendLvs[index], plan.appendSkills.getOrNull(index) ?? 0),
+    ];
   }
 
   final List<PlayerSvtData> svts = [attacker];
