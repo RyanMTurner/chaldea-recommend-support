@@ -1,3 +1,8 @@
+import 'dart:io' show Platform;
+import 'dart:math' show max;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
+
 import 'package:flutter_easyloading/flutter_easyloading.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
@@ -671,6 +676,28 @@ class _TdDmgOptionsTabState extends State<TdDmgOptionsTab> {
           });
         },
       ),
+      if (!kIsWeb)
+        ListTile(
+          dense: true,
+          title: const Text('CPU Cores'),
+          subtitle: const Text(
+            'Worker threads for the damage list, Best Supports and Best CE (0 = main thread). '
+            'Each keeps its own copy of the game data in memory.',
+          ),
+          trailing: DropdownButton<int>(
+            isDense: true,
+            value: options.cores,
+            items: [
+              for (int cores = 0; cores <= max(Platform.numberOfProcessors, options.cores); cores++)
+                DropdownMenuItem(value: cores, child: Text('$cores')),
+            ],
+            onChanged: (v) {
+              setState(() {
+                if (v != null) options.cores = v;
+              });
+            },
+          ),
+        ),
       kDefaultDivider,
       TextButton(
         onPressed: () {

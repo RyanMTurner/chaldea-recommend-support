@@ -589,6 +589,7 @@ TdDamageOptions _$TdDamageOptionsFromJson(Map json) => $checkedCreate('TdDamageO
     damageNpIndivSumCount: $checkedConvert('damageNpIndivSumCount', (v) => (v as num?)?.toInt()),
     damageNpHpRatioMax: $checkedConvert('damageNpHpRatioMax', (v) => v as bool? ?? false),
     simpleMode: $checkedConvert('simpleMode', (v) => v as bool? ?? true),
+    cores: $checkedConvert('cores', (v) => (v as num?)?.toInt()),
   );
   return val;
 });
@@ -634,6 +635,7 @@ Map<String, dynamic> _$TdDamageOptionsToJson(TdDamageOptions instance) => <Strin
   'damageNpIndivSumCount': instance.damageNpIndivSumCount,
   'damageNpHpRatioMax': instance.damageNpHpRatioMax,
   'simpleMode': instance.simpleMode,
+  'cores': instance.cores,
 };
 
 const _$GrandSvtSourceEnumMap = {

@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:chaldea/app/battle/utils/battle_worker_pool.dart';
 import 'package:chaldea/app/modules/common/filter_page_base.dart';
 import 'package:chaldea/generated/l10n.dart';
 import 'package:chaldea/models/gamedata/quest.dart';
@@ -9,6 +12,7 @@ import '../../servant/filter.dart';
 import 'model.dart';
 import 'options_tab.dart';
 import 'ranking_tab.dart';
+import 'td_workers.dart';
 
 class TdDamageRanking extends StatefulWidget {
   final QuestEnemy? enemy;
@@ -39,6 +43,8 @@ class _TdDamageRankingState extends State<TdDamageRanking> with SingleTickerProv
   void dispose() {
     super.dispose();
     _tabController.dispose();
+    // each worker holds a copy of the game data, free it when leaving the page
+    unawaited(BattleWorkerPool.disposeTag(kTdWorkerTag));
   }
 
   @override
