@@ -91,6 +91,15 @@ class _CmdCodeFilterPageState extends FilterPageState<CmdCodeFilterData, CmdCode
               update();
             },
           ),
+          FilterGroup<bool>(
+            title: const Text('Attached To Servants'),
+            options: const [false, true],
+            values: filterData.attach,
+            optionBuilder: (v) => Text(v ? '≥1' : '0'),
+            onFilterChanged: (value, _) {
+              update();
+            },
+          ),
           buildGroupDivider(text: S.current.effect_search),
           FilterGroup<EffectTarget>(
             title: Text(S.current.effect_target),

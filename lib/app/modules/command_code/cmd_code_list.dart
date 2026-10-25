@@ -145,6 +145,10 @@ class CmdCodeListPageState extends State<CmdCodeListPage> with SearchableListSta
     if (!filterData.status.matchOne(cc.status.status)) {
       return false;
     }
+    if (filterData.attach.isNotEmpty &&
+        !filterData.attach.matchOne(CmdCodeFilterData.attachedServantCount(cc.collectionNo) > 0)) {
+      return false;
+    }
 
     if (filterData.effectType.isNotEmpty || filterData.effectTarget.isNotEmpty || filterData.targetTrait.isNotEmpty) {
       List<BaseFunction> funcs = [for (final skill in cc.skills) ...skill.filteredFunction(includeTrigger: true)];

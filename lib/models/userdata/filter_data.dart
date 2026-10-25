@@ -552,6 +552,7 @@ class CmdCodeFilterData with FilterDataMixin {
   final targetTrait = FilterGroupData<int>();
   final effectType = FilterGroupData<SkillEffect>();
   final status = FilterGroupData<int>();
+  final attach = FilterGroupData<bool>(); // false: on 0 servants, true: on >=1 servant
 
   CmdCodeFilterData({
     this.useGrid = false,
@@ -570,7 +571,16 @@ class CmdCodeFilterData with FilterDataMixin {
        );
 
   @override
-  List<FilterGroupData> get groups => [rarity, region, effectTarget, targetTrait, effectType, status];
+  List<FilterGroupData> get groups => [rarity, region, effectTarget, targetTrait, effectType, status, attach];
+
+  /// Number of owned servants in the user's data that have this command code equipped.
+  static int attachedServantCount(int ccCollectionNo) {
+    int count = 0;
+    for (final status in db.curUser.servants.values) {
+      if (status.favorite && status.equipCmdCodes.contains(ccCollectionNo)) count++;
+    }
+    return count;
+  }
 
   @override
   void reset() {
