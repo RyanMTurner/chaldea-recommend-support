@@ -11,6 +11,7 @@ import 'package:chaldea/app/modules/bond/solver/bond_effect.dart';
 import 'package:chaldea/app/modules/bond/solver/results.dart';
 import 'package:chaldea/app/modules/bond/solver/solver.dart';
 import 'package:chaldea/models/models.dart';
+import 'package:chaldea/utils/utils.dart';
 
 import '../test_init.dart';
 
@@ -27,12 +28,37 @@ void main() {
       return effects.isNotEmpty && effects.every((e) => e.isFlat && e.scope == scope);
     });
     final partyCe = findCe(BondEffectScope.team);
-    final selfCe = findCe(BondEffectScope.self);
 
-    final servants = db.gameData.servantsById.values
-        .where((svt) => svt.collectionNo > 0 && svt.isUserSvt)
-        .take(4)
-        .toList();
+    final option = FormationBondOption(
+      maxServants: 6,
+      enableEvent: false,
+      searchFixedAscensions: false,
+      maxCost: 999,
+      maxCandidateTeams: 5,
+    )..validate(quest);
+    final reference = BondReleaseRules.resolve(option.releaseReference, quest);
+    final userSvts = db.gameData.servantsById.values.where((svt) => svt.collectionNo > 0 && svt.isUserSvt).toList();
+
+    // Self bond CEs outside events usually require traits on the wearer (e.g. a class or gender):
+    // pick one with only self effects and wear it on a servant that has the traits. May not exist.
+    (CraftEssence, Servant)? selfPair;
+    for (final ce in db.gameData.craftEssencesById.values) {
+      if (ce.collectionNo <= 0 || ce.id == kHeroicSpiritPortraitDariusCeId) continue;
+      final effects = CeBondEffect.extractAll(ce, true, quest, support: false);
+      if (effects.isEmpty || !effects.every((e) => e.scope == BondEffectScope.self && !e.hasTargetCondition)) {
+        continue;
+      }
+      final wearer = userSvts.firstWhereOrNull(
+        (svt) => effects.every((e) => e.wearerMatches(BondReleaseRules.traits(svt, 4, 0, reference))),
+      );
+      if (wearer != null) {
+        selfPair = (ce, wearer);
+        break;
+      }
+    }
+    final selfCe = selfPair?.$1;
+
+    final servants = [userSvts[0], selfPair?.$2 ?? userSvts[1], userSvts[2], userSvts[3]];
     final source = BattleTeamSetup();
     for (var p = 0; p < 4; p++) {
       source.svts[p] = PlayerSvtData.svt(servants[p]);
@@ -60,13 +86,6 @@ void main() {
       slot(3),
     ]);
 
-    final option = FormationBondOption(
-      maxServants: 6,
-      enableEvent: false,
-      searchFixedAscensions: false,
-      maxCost: 999,
-      maxCandidateTeams: 5,
-    )..validate(quest);
     final tab = BondSolverResultsTab(
       solved: null,
       formation: source,
@@ -78,15 +97,24 @@ void main() {
     );
 
     final contributions = tab.ceBondContributions(team);
-    expect(contributions.keys.toSet(), {(0, SvtEquipTarget.normal), (1, SvtEquipTarget.normal)});
+    expect(contributions.keys.toSet(), {
+      (0, SvtEquipTarget.normal),
+      if (selfCe != null) (1, SvtEquipTarget.normal),
+    });
 
     final (partyBond, partyCount) = contributions[(0, SvtEquipTarget.normal)]!;
     expect(partyCount, 3, reason: 'positions 0, 1, 3; the support at 2 earns no bond');
     expect(partyBond, greaterThan(0));
 
-    final (selfBond, selfCount) = contributions[(1, SvtEquipTarget.normal)]!;
-    expect(selfCount, 1);
-    expect(selfBond, greaterThan(0));
+    int selfBond = 0;
+    if (selfCe != null) {
+      final (bond, count) = contributions[(1, SvtEquipTarget.normal)]!;
+      expect(count, 1, reason: 'only its wearer: ${selfCe.lName.l} on ${servants[1].lName.l}');
+      expect(bond, greaterThan(0));
+      selfBond = bond;
+    } else {
+      markTestSkipped('no self-only bond CE usable outside events in this game data; party CE checked only');
+    }
 
     // the label's numbers add up to the team total minus a team without CEs
     final applied = team.applyTo(source, FormationBondOption.fromJson(option.toJson()));
