@@ -759,8 +759,14 @@ class TdDmgSolver {
     if (!options.enableActiveSkills) {
       data.skills.fillRange(0, data.skills.length, null);
     }
-    for (int index = 0; index < data.appendLvs.length; index++) {
-      data.appendLvs[index] = (options.appendSkills.getOrNull(index) ?? false) ? 10 : 0;
+    if (options.playerAppend) {
+      // player's own append levels: from the plan chosen in Player Data, or current status without player data
+      final plan = options.usePlayerSvt == PreferPlayerSvtDataSource.target ? svt.curPlan : svt.status.cur;
+      data.appendLvs = List.generate(data.appendLvs.length, (index) => plan.appendSkills.getOrNull(index) ?? 0);
+    } else {
+      for (int index = 0; index < data.appendLvs.length; index++) {
+        data.appendLvs[index] = (options.appendSkills.getOrNull(index) ?? false) ? 10 : 0;
+      }
     }
 
     final extraBuffs = options.extraBuffs.buildSkill();

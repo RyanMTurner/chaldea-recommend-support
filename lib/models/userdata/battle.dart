@@ -1020,6 +1020,7 @@ class TdDamageOptions {
   bool twiceActiveSkill;
   bool twiceSkillOnTurn3;
   List<bool> appendSkills;
+  bool playerAppend; // use the player's own append levels instead of [appendSkills]
   // bool includeRefundAfterTd = true; // 重蓄力
   SvtLv svtLv;
   int fouHpAtk;
@@ -1067,6 +1068,7 @@ class TdDamageOptions {
     this.twiceActiveSkill = false,
     this.twiceSkillOnTurn3 = false,
     List<bool>? appendSkills,
+    this.playerAppend = false,
     this.svtLv = SvtLv.maxLv,
     this.fouHpAtk = 1000,
     this.tdR3 = 5,
