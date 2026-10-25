@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 
 import 'package:flutter_easyloading/flutter_easyloading.dart';
@@ -14,8 +17,8 @@ import 'package:chaldea/widgets/widgets.dart';
 import '../../mystic_code/mystic_code_list.dart';
 import '../battle_simulation.dart';
 import '../formation/team.dart';
-import '../simulation/fga_export.dart';
 import 'solver.dart';
+import 'workers.dart';
 
 /// Kept while the app runs, so leaving and reopening the page keeps the setup and last result.
 class _TeamGeneratorState {
@@ -38,16 +41,19 @@ class TeamGeneratorPage extends StatefulWidget {
 
 class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
   _TeamGeneratorState get state => TeamGeneratorPage._state;
-  TeamGeneratorSolver? _solver;
+  TeamGeneratorRun? _solver;
   int _simulations = 0;
   int _elapsedMs = 0;
   bool _paused = false;
+  bool _startingWorkers = false;
 
   bool get solving => _solver != null;
 
   @override
   void dispose() {
     _solver?.cancel();
+    // each worker holds a copy of the game data, free it when leaving the page
+    unawaited(TeamGeneratorWorkerPool.disposeCurrent());
     super.dispose();
   }
 
@@ -74,46 +80,85 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
       return;
     }
     final formation = state.formation.copy();
-    final solver = TeamGeneratorSolver(
+    final settings = state.settings.copy();
+    void onProgress(int simulations, int elapsed) {
+      if (mounted) {
+        setState(() {
+          _simulations = simulations;
+          _elapsedMs = elapsed;
+        });
+      }
+    }
+
+    void onPaused(int simulations, int elapsed) {
+      if (mounted) {
+        setState(() {
+          _paused = true;
+          _simulations = simulations;
+          _elapsedMs = elapsed;
+        });
+      }
+    }
+
+    TeamGeneratorRun singleThread() => TeamGeneratorSolver(
       quest: quest,
       formation: formation,
-      settings: state.settings,
-      onProgress: (simulations, elapsed) {
-        if (mounted) {
-          setState(() {
-            _simulations = simulations;
-            _elapsedMs = elapsed;
-          });
-        }
-      },
-      onPaused: (simulations, elapsed) {
-        if (mounted) {
-          setState(() {
-            _paused = true;
-            _simulations = simulations;
-            _elapsedMs = elapsed;
-          });
-        }
-      },
+      settings: settings,
+      onProgress: onProgress,
+      onPaused: onPaused,
     );
+    final useWorkers = !kIsWeb && settings.workers > 0;
+    final TeamGeneratorRun run = useWorkers
+        ? ParallelTeamGeneratorRun(
+            quest: quest,
+            formation: formation,
+            settings: settings,
+            onProgress: onProgress,
+            onPaused: onPaused,
+            onWorkersReady: () {
+              if (mounted) setState(() => _startingWorkers = false);
+            },
+          )
+        : singleThread();
     setState(() {
-      _solver = solver;
+      _solver = run;
       _paused = false;
+      _startingWorkers = useWorkers;
       _simulations = 0;
       _elapsedMs = 0;
       state.result = null;
     });
+    // let the progress view draw before the game data copy (first parallel solve) blocks the UI thread
+    await Future.delayed(const Duration(milliseconds: 50));
     TeamGeneratorResult result;
     try {
-      result = await solver.solve();
+      result = await run.solve();
     } catch (e, s) {
-      logger.e('team generator failed', e, s);
-      result = TeamGeneratorResult(success: false, message: 'Error: $e', simulations: 0, elapsedMilliseconds: 0);
+      if (useWorkers && !(_solver?.isPaused ?? false) && mounted && identical(_solver, run)) {
+        // workers could not start: search on the UI thread instead
+        logger.e('team generator workers failed, falling back to the UI thread', e, s);
+        EasyLoading.showToast('Worker threads unavailable, searching on the main thread');
+        final fallback = singleThread();
+        setState(() {
+          _solver = fallback;
+          _startingWorkers = false;
+        });
+        try {
+          result = await fallback.solve();
+        } catch (e, s) {
+          logger.e('team generator failed', e, s);
+          result = TeamGeneratorResult(success: false, message: 'Error: $e', simulations: 0, elapsedMilliseconds: 0);
+        }
+      } else {
+        logger.e('team generator failed', e, s);
+        result = TeamGeneratorResult(success: false, message: 'Error: $e', simulations: 0, elapsedMilliseconds: 0);
+      }
     }
     if (!mounted) return;
     setState(() {
       _solver = null;
       _paused = false;
+      _startingWorkers = false;
       state
         ..result = result
         ..resultQuest = quest
@@ -159,6 +204,15 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
                 (v) => state.settings.timeLimitSeconds = v,
                 enabled: !solving || _paused, // also sets how much "Add more time" adds
               ),
+              if (!kIsWeb)
+                _numberTile(
+                  'Worker Threads',
+                  state.settings.workers,
+                  0,
+                  (v) => state.settings.workers = v,
+                  subtitle: '0 = main thread. Each worker keeps its own copy of the game data in memory.',
+                  prefix: '',
+                ),
             ],
           ),
           Padding(
@@ -194,7 +248,13 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
                     children: [
                       const LinearProgressIndicator(),
                       const SizedBox(height: 8),
-                      Text('Simulated $_simulations turns · ${(_elapsedMs / 1000).toStringAsFixed(1)}s'),
+                      Text(
+                        _startingWorkers
+                            ? 'Starting ${state.settings.workers} worker thread(s)… '
+                                  'The first solve copies the game data, the app may pause briefly.'
+                            : 'Simulated $_simulations turns · ${(_elapsedMs / 1000).toStringAsFixed(1)}s',
+                        textAlign: TextAlign.center,
+                      ),
                       TextButton(onPressed: () => _solver?.cancel(), child: Text(S.current.cancel)),
                     ],
                   )
@@ -210,15 +270,24 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
     );
   }
 
-  Widget _numberTile(String title, int value, int min, void Function(int) update, {bool? enabled}) {
+  Widget _numberTile(
+    String title,
+    int value,
+    int min,
+    void Function(int) update, {
+    bool? enabled,
+    String? subtitle,
+    String prefix = '≤',
+  }) {
     return ListTile(
       dense: true,
       title: Text(title),
+      subtitle: subtitle == null ? null : Text(subtitle),
       trailing: TextButton(
         onPressed: (enabled ?? !solving)
             ? () => _editNumber(title: title, initial: value, min: min, update: update)
             : null,
-        child: Text('≤$value'),
+        child: Text('$prefix$value'),
       ),
     );
   }
@@ -327,8 +396,7 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
 
   Widget _resultView(TeamGeneratorResult result) {
     final theme = Theme.of(context);
-    final battle = result.battle;
-    final command = battle == null ? '' : FgaCommandExporter(battle.recorder.records).export();
+    final command = result.fgaCommand;
 
     return TileGroup(
       header: 'Plan',
@@ -351,7 +419,7 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
             title: Text('${S.current.battle_turn} ${index + 1} · ${S.current.quest_wave} ${turn.wave}'),
             subtitle: Text(turn.steps.join('\n')),
           ),
-        if (result.success && battle != null) ...[
+        if (result.success && result.shareData != null) ...[
           ListTile(
             dense: true,
             title: const Text('FGA Command'),
@@ -385,15 +453,15 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
   void _openInBattleSim(TeamGeneratorResult result) {
     final quest = state.resultQuest;
     final formation = state.resultFormation;
-    final battle = result.battle;
-    if (quest == null || formation == null || battle == null) return;
+    final shareData = result.shareData;
+    if (quest == null || formation == null || shareData == null) return;
     router.push(
       url: Routes.laplaceBattle,
       child: BattleSimulationPage(
         questPhase: quest,
         region: null,
         options: BattleOptions()..formation = formation.copy(),
-        replayActions: TeamGeneratorSolver.toShareData(quest, formation, battle),
+        replayActions: shareData,
       ),
     );
   }

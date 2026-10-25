@@ -3,6 +3,7 @@
 //  16. Team Generator: Order Change (mystic code) support
 //  17. Team Generator: the incoming servant may save skills for later turns
 //  18. Team Generator: pause at the time limit, "Add more time" continues the same search
+//  19. Team Generator: parallel search on worker isolates
 //
 // Run: flutter test test/fork --dart-define=APP_PATH=/path/to/app/data
 import 'package:flutter_test/flutter_test.dart';
@@ -10,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:chaldea/app/battle/models/battle.dart';
 import 'package:chaldea/app/modules/battle/simulation/fga_export.dart';
 import 'package:chaldea/app/modules/battle/team_generator/solver.dart';
+import 'package:chaldea/app/modules/battle/team_generator/workers.dart';
 import 'package:chaldea/models/models.dart';
 
 import '../test_init.dart';
@@ -207,6 +209,77 @@ void main() async {
       final result = await solver.solve();
       expect(result.success, isFalse);
       expect(result.message, contains('No plan found within 0s'));
+    });
+  });
+
+  group('Parallel', () {
+    TeamGeneratorSettings csSettings({int workers = 0}) =>
+        TeamGeneratorSettings(maxTurns: waves, maxCommandSpells: 3, timeLimitSeconds: 120, workers: workers);
+
+    test('first-turn options are split between partitions; together they find the plan', () async {
+      final results = [
+        for (int index = 0; index < 2; index++)
+          await TeamGeneratorSolver(
+            quest: quest,
+            formation: altriaTeam(),
+            settings: csSettings(),
+            partitionIndex: index,
+            partitionCount: 2,
+          ).solve(),
+      ];
+      expect(results.any((r) => r.success), isTrue, reason: results.map((r) => r.message).join(' / '));
+      final full = await TeamGeneratorSolver(quest: quest, formation: altriaTeam(), settings: csSettings()).solve();
+      expect(full.success, isTrue);
+    });
+
+    test('external pause and resume (used by parallel runs to share one clock)', () async {
+      final solver = TeamGeneratorSolver(quest: quest, formation: altriaTeam(), settings: csSettings());
+      solver.pause();
+      expect(solver.isPaused, isTrue);
+      final future = solver.solve();
+      await Future.delayed(const Duration(milliseconds: 100));
+      expect(solver.simulations, 0, reason: 'paused before the first simulation');
+      solver.resume();
+      final result = await future;
+      expect(result.success, isTrue, reason: result.message);
+      expect(result.fgaCommand, isNotEmpty);
+      expect(result.shareData, isNotNull);
+    });
+
+    test('workers find a plan; FGA command and replay data come back without the battle object', () async {
+      try {
+        final run = ParallelTeamGeneratorRun(quest: quest, formation: altriaTeam(), settings: csSettings(workers: 2));
+        final result = await run.solve();
+        expect(result.success, isTrue, reason: result.message);
+        expect(result.battle, isNull);
+        expect(result.fgaCommand, contains('o1'));
+        expect(result.shareData?.actions, isNotEmpty);
+        expect(result.commandSpellsUsed, inInclusiveRange(1, 3));
+
+        // the pool is reused for the next solve
+        final again = await ParallelTeamGeneratorRun(
+          quest: quest,
+          formation: altriaTeam(),
+          settings: csSettings(workers: 2),
+        ).solve();
+        expect(again.success, isTrue);
+      } finally {
+        await TeamGeneratorWorkerPool.disposeCurrent();
+      }
+    });
+
+    test('workers: impossible plan ends with "No plan" once every worker is done', () async {
+      try {
+        final result = await ParallelTeamGeneratorRun(
+          quest: quest,
+          formation: altriaTeam(),
+          settings: TeamGeneratorSettings(maxTurns: waves, maxCommandSpells: 0, timeLimitSeconds: 120, workers: 2),
+        ).solve();
+        expect(result.success, isFalse);
+        expect(result.message, contains('No plan clears'));
+      } finally {
+        await TeamGeneratorWorkerPool.disposeCurrent();
+      }
     });
   });
 }

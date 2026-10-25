@@ -1,5 +1,8 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import 'package:tuple/tuple.dart';
 
@@ -8,6 +11,8 @@ import 'package:chaldea/app/battle/models/battle.dart';
 import 'package:chaldea/app/battle/utils/battle_logger.dart';
 import 'package:chaldea/models/models.dart';
 import 'package:chaldea/utils/utils.dart';
+
+import '../simulation/fga_export.dart';
 
 /// User settings for the Team Generator solver.
 class TeamGeneratorSettings {
@@ -18,12 +23,38 @@ class TeamGeneratorSettings {
   /// How many usable skills may be saved for later turns in one turn (search width).
   int maxHeldSkills;
 
+  /// Background worker isolates; 0 = search on the UI thread.
+  int workers;
+
   TeamGeneratorSettings({
     this.maxTurns = 3,
     this.maxCommandSpells = 0,
     this.timeLimitSeconds = 60,
     this.maxHeldSkills = 2,
-  });
+    int? workers,
+  }) : workers = workers ?? defaultWorkers;
+
+  /// CPU cores - 1, at least 1 and at most 4 (each worker holds its own copy of the game data). 0 on web.
+  static int get defaultWorkers => kIsWeb ? 0 : max(1, min(4, Platform.numberOfProcessors - 1));
+
+  TeamGeneratorSettings copy() => TeamGeneratorSettings(
+    maxTurns: maxTurns,
+    maxCommandSpells: maxCommandSpells,
+    timeLimitSeconds: timeLimitSeconds,
+    maxHeldSkills: maxHeldSkills,
+    workers: workers,
+  );
+}
+
+/// A running search, on the UI thread ([TeamGeneratorSolver]) or in workers (parallel run).
+abstract class TeamGeneratorRun {
+  Future<TeamGeneratorResult> solve();
+  void cancel();
+
+  /// Give a paused search more time; it continues from where it stopped.
+  void addTime(int seconds);
+  bool get isPaused;
+  int get timeLimitSeconds;
 }
 
 /// A servant skill (slot 0-2, skill 0-2) or a mystic code skill (slot == null).
@@ -71,8 +102,12 @@ class TeamGeneratorResult {
   final String message;
   final List<TgTurnPlan> turns;
 
-  /// Final battle state of a successful plan (records for replay/FGA export).
+  /// Final battle state of a successful plan, only when solved on this isolate (null from workers).
   final BattleData? battle;
+
+  /// FGA command and Battle Simulation replay data of a successful plan.
+  final String fgaCommand;
+  final BattleShareData? shareData;
   final int simulations;
   final int elapsedMilliseconds;
 
@@ -81,9 +116,22 @@ class TeamGeneratorResult {
     required this.message,
     this.turns = const [],
     this.battle,
+    this.fgaCommand = '',
+    this.shareData,
     required this.simulations,
     required this.elapsedMilliseconds,
   });
+
+  TeamGeneratorResult copyWith({String? message, int? simulations, int? elapsedMilliseconds}) => TeamGeneratorResult(
+    success: success,
+    message: message ?? this.message,
+    turns: turns,
+    battle: battle,
+    fgaCommand: fgaCommand,
+    shareData: shareData,
+    simulations: simulations ?? this.simulations,
+    elapsedMilliseconds: elapsedMilliseconds ?? this.elapsedMilliseconds,
+  );
 
   int get commandSpellsUsed => turns.fold(0, (sum, turn) => sum + turn.commandSpellTargets.length);
 }
@@ -100,7 +148,7 @@ class TeamGeneratorResult {
 /// other mystic code skills, Order Change, the incoming servant's skills, then the firing servants' skills.
 ///
 /// Limits: ST NPs hit the default target, and skills with options use the engine's default (no choice).
-class TeamGeneratorSolver {
+class TeamGeneratorSolver implements TeamGeneratorRun {
   final QuestPhase quest;
   final BattleTeamSetup formation;
   final TeamGeneratorSettings settings;
@@ -115,40 +163,63 @@ class TeamGeneratorSolver {
     required this.settings,
     this.onProgress,
     this.onPaused,
+    this.partitionIndex = 0,
+    this.partitionCount = 1,
   }) : _timeLimitSeconds = settings.timeLimitSeconds;
 
+  /// Parallel runs: this solver only explores first-turn options where `option % partitionCount == partitionIndex`.
+  final int partitionIndex;
+  final int partitionCount;
+
   bool _cancelled = false;
+  @override
   void cancel() {
     _cancelled = true;
-    _pause?.complete(false);
+    final pause = _pause;
+    if (pause != null && !pause.isCompleted) pause.complete(false);
   }
 
   /// Current time limit; grows with [addTime].
   int _timeLimitSeconds;
+  @override
   int get timeLimitSeconds => _timeLimitSeconds;
   bool _reachedTimeLimit = false;
   Completer<bool>? _pause;
+  @override
   bool get isPaused => _pause != null;
 
-  /// Give a paused search more time; it continues from the branch where it stopped.
+  @override
   void addTime(int seconds) {
     _timeLimitSeconds += seconds;
-    _pause?.complete(true);
+    resume();
   }
 
-  /// At the time limit, wait for the user. Returns false if the search should stop.
+  /// Pause from outside (parallel runs keep one clock for all workers). Takes effect at the next check.
+  void pause() {
+    _pause ??= Completer<bool>();
+  }
+
+  void resume() {
+    final pause = _pause;
+    if (pause != null && !pause.isCompleted) pause.complete(true);
+  }
+
+  /// At the time limit or when paused from outside, wait. Returns false if the search should stop.
   Future<bool> _continueAfterTimeLimit() async {
     if (_cancelled) return false;
-    if (_watch.elapsed.inSeconds < _timeLimitSeconds) return true;
-    _reachedTimeLimit = true;
+    if (_pause == null && _watch.elapsed.inSeconds >= _timeLimitSeconds) {
+      _reachedTimeLimit = true;
+      _pause = Completer<bool>();
+      onPaused?.call(simulations, _watch.elapsedMilliseconds);
+    }
+    final pause = _pause;
+    if (pause == null) return true;
     _watch.stop();
-    final pause = _pause = Completer<bool>();
-    onPaused?.call(simulations, _watch.elapsedMilliseconds);
     final resume = await pause.future;
     _pause = null;
     if (!resume || _cancelled) return false;
     _watch.start();
-    return _watch.elapsed.inSeconds < _timeLimitSeconds || await _continueAfterTimeLimit();
+    return _continueAfterTimeLimit();
   }
 
   final Stopwatch _watch = Stopwatch();
@@ -159,6 +230,7 @@ class TeamGeneratorSolver {
   TgOrderChange? _pendingSwap;
 
 
+  @override
   Future<TeamGeneratorResult> solve() async {
     _watch
       ..reset()
@@ -188,7 +260,16 @@ class TeamGeneratorSolver {
     final found = await _search(battle, plans, 0);
     _watch.stop();
     if (found) {
-      return _result(true, 'Cleared in ${plans.length} turn(s).', turns: plans, battle: battle);
+      return TeamGeneratorResult(
+        success: true,
+        message: 'Cleared in ${plans.length} turn(s).',
+        turns: plans,
+        battle: battle,
+        fgaCommand: FgaCommandExporter(battle.recorder.records).export(),
+        shareData: toShareData(quest, team, battle),
+        simulations: simulations,
+        elapsedMilliseconds: _watch.elapsedMilliseconds,
+      );
     }
     if (_reachedTimeLimit && _cancelled) return _result(false, 'No plan found within ${_timeLimitSeconds}s.');
     if (_cancelled) return _result(false, 'Cancelled.');
@@ -217,12 +298,15 @@ class TeamGeneratorSolver {
 
     final skills = availableSkills(battle);
     final swaps = orderChangeOptions(battle);
+    final firstTurn = plans.isEmpty;
+    int option = 0;
     for (final fire in _fireSets(battle, mustClear, swaps.length > 1)) {
       for (final held in _heldSets(skills, fire)) {
         for (final (swap, incomingHeld) in [
           for (final swap in swaps)
             for (final incomingHeld in incomingHeldSets(battle, swap, settings.maxHeldSkills)) (swap, incomingHeld),
         ]) {
+          if (firstTurn && (option++ % partitionCount) != partitionIndex) continue;
           final waveBefore = battle.waveCount;
           final depth = battle.snapshots.length;
           battle.pushSnapshot();
