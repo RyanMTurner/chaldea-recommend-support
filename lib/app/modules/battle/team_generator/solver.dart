@@ -46,6 +46,9 @@ class TgTurnPlan {
   final int wave;
   final List<(TgSkillRef skill, int? target)> skills;
   final TgOrderChange? orderChange;
+
+  /// Skill indices (0-2) the incoming servant saved for later turns.
+  final Set<int> incomingHeld;
   final List<int> commandSpellTargets;
   final List<int> npSlots;
 
@@ -56,6 +59,7 @@ class TgTurnPlan {
     required this.wave,
     required this.skills,
     required this.orderChange,
+    this.incomingHeld = const {},
     required this.commandSpellTargets,
     required this.npSlots,
     required this.steps,
@@ -176,13 +180,24 @@ class TeamGeneratorSolver {
     final swaps = orderChangeOptions(battle);
     for (final fire in _fireSets(battle, mustClear, swaps.length > 1)) {
       for (final held in _heldSets(skills, fire)) {
-        for (final swap in swaps) {
+        for (final (swap, incomingHeld) in [
+          for (final swap in swaps)
+            for (final incomingHeld in incomingHeldSets(battle, swap, settings.maxHeldSkills)) (swap, incomingHeld),
+        ]) {
           final waveBefore = battle.waveCount;
           final depth = battle.snapshots.length;
           battle.pushSnapshot();
           TgTurnPlan? plan;
           try {
-            plan = await _applyTurn(battle, skills, held, swap, fire, settings.maxCommandSpells - csUsed);
+            plan = await _applyTurn(
+              battle,
+              skills,
+              held,
+              swap,
+              incomingHeld,
+              fire,
+              settings.maxCommandSpells - csUsed,
+            );
           } catch (e) {
             plan = null; // engine refused an action, treat as a dead branch
           }
@@ -279,6 +294,35 @@ class TeamGeneratorSolver {
     return options;
   }
 
+  /// Skills the incoming servant may save for later: none first, then every subset up to [maxHeld].
+  /// Read from the backup row before the swap (skills off cooldown).
+  static List<Set<int>> incomingHeldSets(BattleData battle, TgOrderChange? swap, int maxHeld) {
+    if (swap == null) return const [{}];
+    final incoming = battle.backupAllyServants.getOrNull(swap.backup);
+    if (incoming == null) return const [{}];
+    final ready = <int>[
+      for (final (index, info) in incoming.skillInfoList.indexed)
+        if (info.skill != null && info.chargeTurn == 0) index,
+    ];
+    final sets = <Set<int>>[{}];
+    for (int size = 1; size <= min(maxHeld, ready.length); size++) {
+      void build(int start, List<int> current) {
+        if (current.length == size) {
+          sets.add(current.toSet());
+          return;
+        }
+        for (int i = start; i < ready.length; i++) {
+          current.add(ready[i]);
+          build(i + 1, current);
+          current.removeLast();
+        }
+      }
+
+      build(0, []);
+    }
+    return sets;
+  }
+
   static bool _needsAllyTarget(BaseSkill skill) {
     return skill.functions.any(
       (func) => func.funcTargetTeam != FuncApplyTarget.enemy && func.funcTargetType.needNormalOneTarget,
@@ -348,6 +392,7 @@ class TeamGeneratorSolver {
     List<TgSkillRef> skills,
     Set<int> held,
     TgOrderChange? swap,
+    Set<int> incomingHeld,
     List<int> fire,
     int commandSpellsLeft,
   ) async {
@@ -405,7 +450,11 @@ class TeamGeneratorSolver {
       }
       steps.add('Order Change: $outName ⇄ $inName');
       for (final skill in availableSkills(battle, slots: [swap.onField])) {
+        if (incomingHeld.contains(skill.skillIndex)) continue;
         await useSkill(skill);
+      }
+      if (incomingHeld.isNotEmpty) {
+        steps.add('$inName saves ${(incomingHeld.toList()..sort()).map((i) => 'S${i + 1}').join(', ')} for later');
       }
     }
     // 4. the servants who fire
@@ -446,6 +495,7 @@ class TeamGeneratorSolver {
       wave: wave,
       skills: used,
       orderChange: swap,
+      incomingHeld: incomingHeld,
       commandSpellTargets: commandSpells,
       npSlots: fire,
       steps: steps,

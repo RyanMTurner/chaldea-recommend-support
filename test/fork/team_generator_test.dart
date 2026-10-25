@@ -1,6 +1,7 @@
 // Fork feature test:
 //  15. Team Generator: find a skill / Command Spell / NP plan that clears a quest with a fixed team
 //  16. Team Generator: Order Change (mystic code) support
+//  17. Team Generator: the incoming servant may save skills for later turns
 //
 // Run: flutter test test/fork --dart-define=APP_PATH=/path/to/app/data
 import 'package:flutter_test/flutter_test.dart';
@@ -122,6 +123,33 @@ void main() async {
         isNot(contains(TeamGeneratorSolver.orderChangeSkillIndex(battle))),
         reason: 'Order Change is handled separately',
       );
+    });
+
+    test('incoming servant hold options: none first, then subsets of its ready skills', () async {
+      final battle = BattleData();
+      final team = swapTeam();
+      await battle.init(quest, team.svts, team.mysticCodeData);
+      const swap = (onField: 0, backup: 0);
+      final ready = [
+        for (final (index, info) in battle.backupAllyServants[0]!.skillInfoList.indexed)
+          if (info.skill != null && info.chargeTurn == 0) index,
+      ];
+      expect(ready, isNotEmpty);
+
+      expect(TeamGeneratorSolver.incomingHeldSets(battle, null, 2), [<int>{}], reason: 'no swap, nothing to hold');
+      expect(TeamGeneratorSolver.incomingHeldSets(battle, swap, 0), [<int>{}]);
+
+      final sets = TeamGeneratorSolver.incomingHeldSets(battle, swap, 2);
+      expect(sets.first, isEmpty);
+      final n = ready.length;
+      expect(sets.length, 1 + n + n * (n - 1) ~/ 2);
+      for (final set in sets) {
+        expect(set.length, lessThanOrEqualTo(2));
+        expect(ready.toSet().containsAll(set), isTrue);
+      }
+      for (int i = 1; i < sets.length; i++) {
+        expect(sets[i - 1].length <= sets[i].length, isTrue, reason: 'smallest sets first');
+      }
     });
 
     test('swaps the backup attacker in, replays and exports x<front><sub>', () async {
