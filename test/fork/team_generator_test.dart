@@ -6,6 +6,7 @@
 //  19. Team Generator: parallel search on worker isolates
 //  20. Team Generator: single-ally skill targets are searched (1-turn buffs stay on the attacker),
 //      any number of skills may stay unused
+//  21. Team Generator: skills that can't help are never used; long party buffs are used right away
 //
 // Run: flutter test test/fork --dart-define=APP_PATH=/path/to/app/data
 import 'package:flutter_test/flutter_test.dart';
@@ -339,6 +340,97 @@ void main() async {
       ).solve();
       expect(result.success, isTrue, reason: result.message);
       expect(result.turns.first.steps.any((step) => step.startsWith('Not used')), isFalse);
+    });
+  });
+
+  group('Skill use by effect', () {
+    NiceSkill? findSkill(bool Function(NiceSkill skill) test) {
+      for (final svt in db.gameData.servantsNoDup.values) {
+        for (final skill in svt.skills) {
+          if (skill.functions.isNotEmpty && test(skill)) return skill;
+        }
+      }
+      return null;
+    }
+
+    const starOnlyBuffs = {'upStarweight', 'upCriticalpoint', 'regainStar', 'upCriticalrate'};
+
+    test('star-only skill is never used', () {
+      final skill = findSkill(
+        (skill) => skill.functions.every(
+          (f) =>
+              f.funcType == FuncType.gainStar ||
+              (f.buffs.isNotEmpty && f.buffs.every((b) => starOnlyBuffs.contains(b.type.name))),
+        ),
+      );
+      expect(skill, isNotNull);
+      expect(TeamGeneratorSolver.skillUse(skill!), TgSkillUse.never);
+    });
+
+    test('party ATK up for 3 turns is used right away', () {
+      final skill = findSkill(
+        (skill) => skill.functions.every(
+          (f) =>
+              f.funcTargetType == FuncTargetType.ptAll &&
+              f.buffs.isNotEmpty &&
+              f.buffs.every((b) => b.type == BuffType.upAtk) &&
+              f.svals.firstOrNull?.Turn == 3,
+        ),
+      );
+      expect(skill, isNotNull);
+      expect(TeamGeneratorSolver.skillUse(skill!), TgSkillUse.always);
+    });
+
+    test('NP charge and single-target skills stay a search choice', () {
+      final charge = findSkill(
+        (skill) =>
+            skill.functions.any((f) => f.funcType == FuncType.gainNp && f.funcTargetType == FuncTargetType.ptAll),
+      );
+      expect(charge, isNotNull);
+      expect(TeamGeneratorSolver.skillUse(charge!), TgSkillUse.choose);
+
+      final single = findSkill(
+        (skill) => skill.functions.every(
+          (f) =>
+              f.funcTargetType == FuncTargetType.ptOne &&
+              f.buffs.isNotEmpty &&
+              f.buffs.every((b) => b.type == BuffType.upAtk) &&
+              f.svals.firstOrNull?.Turn == 3,
+        ),
+      );
+      expect(single, isNotNull);
+      expect(TeamGeneratorSolver.skillUse(single!), TgSkillUse.choose);
+    });
+
+    test('enemy debuffs stay a search choice (wasted on the next wave if used early)', () {
+      final debuff = findSkill(
+        (skill) => skill.functions.every(
+          (f) =>
+              f.funcTargetType == FuncTargetType.enemyAll &&
+              f.buffs.isNotEmpty &&
+              f.buffs.every((b) => b.type == BuffType.downDefence) &&
+              f.svals.firstOrNull?.Turn == 3,
+        ),
+      );
+      expect(debuff, isNotNull);
+      expect(TeamGeneratorSolver.skillUse(debuff!), TgSkillUse.choose);
+    });
+
+    test('never-used skills are left out of the turn', () async {
+      final battle = BattleData();
+      final team = altriaTeam();
+      await battle.init(quest, team.svts, team.mysticCodeData);
+      final altria = battle.onFieldAllyServants[0]!;
+      final listed = TeamGeneratorSolver.availableSkills(battle).map((s) => s.skillIndex).toSet();
+      for (final (index, info) in altria.skillInfoList.indexed) {
+        final skill = info.skill;
+        if (skill == null) continue;
+        expect(
+          listed.contains(index),
+          TeamGeneratorSolver.skillUse(skill) != TgSkillUse.never,
+          reason: 'Altria S${index + 1}',
+        );
+      }
     });
   });
 }

@@ -66,6 +66,9 @@ class TgSkillRef {
   /// Single-ally skill that may target anyone (NP charge or a buff lasting more than 1 turn).
   /// Otherwise it only goes to this turn's main attacker.
   final bool anyAllyTarget;
+
+  /// Party/self buffs lasting 3+ turns without NP charge: used as soon as ready, never saved.
+  final bool alwaysUse;
   final String name;
 
   const TgSkillRef({
@@ -73,6 +76,7 @@ class TgSkillRef {
     required this.skillIndex,
     required this.needsAllyTarget,
     this.anyAllyTarget = false,
+    this.alwaysUse = false,
     required this.name,
   });
 
@@ -81,6 +85,9 @@ class TgSkillRef {
 
 /// Order Change: front-line slot (0-2) swapped with backup index (0-2).
 typedef TgOrderChange = ({int onField, int backup});
+
+/// How the solver treats a skill, see [TeamGeneratorSolver.skillUse].
+enum TgSkillUse { never, always, choose }
 
 /// One way to play a turn. The default is "use every ready skill, single-ally skills on this turn's
 /// main attacker"; [cost] counts the departures from it (each unused skill or other target = 1).
@@ -436,6 +443,7 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
     final swapOut = swap?.onField;
     final decisions = <_Decision>[];
     for (final (index, skill) in skills.indexed) {
+      if (skill.alwaysUse) continue; // no choice: used right away
       // used before the swap: the leaving servant's own slot would waste the effect
       final usedBeforeSwap = skill.isMysticCode || !fire.contains(skill.slot) || skill.slot == swapOut;
       decisions.add(
@@ -452,6 +460,7 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
       for (final (index, info) in (incoming?.skillInfoList ?? <BattleSkillInfoData>[]).indexed) {
         final skill = info.skill;
         if (skill == null || info.chargeTurn > 0) continue;
+        if (skillUse(skill) != TgSkillUse.choose) continue; // never used, or always used right away
         final anyTarget = _needsAllyTarget(skill) && _anyAllyTarget(skill);
         decisions.add(
           _Decision('i$index', [
@@ -532,12 +541,15 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
         final skill = info.skill;
         if (skill == null || info.chargeTurn > 0) continue;
         if (!battle.canUseSvtSkillIgnoreCoolDown(slot, index)) continue;
+        final use = skillUse(skill);
+        if (use == TgSkillUse.never) continue;
         skills.add(
           TgSkillRef(
             slot: slot,
             skillIndex: index,
             needsAllyTarget: _needsAllyTarget(skill),
             anyAllyTarget: _anyAllyTarget(skill),
+            alwaysUse: use == TgSkillUse.always,
             name: '${svt.lBattleName} S${index + 1}',
           ),
         );
@@ -549,12 +561,15 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
       final skill = info.skill;
       if (skill == null || info.chargeTurn > 0 || _isOrderChange(skill)) continue;
       if (!battle.canUseMysticCodeSkillIgnoreCoolDown(index)) continue;
+      final use = skillUse(skill);
+      if (use == TgSkillUse.never) continue;
       skills.add(
         TgSkillRef(
           slot: null,
           skillIndex: index,
           needsAllyTarget: _needsAllyTarget(skill),
           anyAllyTarget: _anyAllyTarget(skill),
+          alwaysUse: use == TgSkillUse.always,
           name: 'MC S${index + 1}',
         ),
       );
@@ -638,6 +653,140 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
     if (funcs.any(_isNpCharge)) return true;
     final oneTurnBuffsOnly = funcs.every((func) => func.buffs.isNotEmpty && func.svals.firstOrNull?.Turn == 1);
     return !oneTurnBuffsOnly;
+  }
+
+  /// Buffs that change damage dealt by the holder or taken by the target (offense, defense, NP, traits, class).
+  static const _damageBuffs = {
+    'upCommandatk',
+    'downCommandatk',
+    'upAtk',
+    'downAtk',
+    'upDamage',
+    'downDamage',
+    'addDamage',
+    'subDamage',
+    'upNpdamage',
+    'downNpdamage',
+    'upCriticaldamage',
+    'downCriticaldamage',
+    'upCommandall',
+    'downCommandall',
+    'upChagetd',
+    'upDamageIndividuality',
+    'downDamageIndividuality',
+    'upDamageIndividualityActiveonly',
+    'downDamageIndividualityActiveonly',
+    'pierceDefence',
+    'pierceInvincible',
+    'breakAvoidance',
+    'multiattack',
+    'overwriteBattleclass',
+    'overwriteClassrelatioAtk',
+    'overwriteClassrelatioDef',
+    'overwriteClassRelation',
+    'overwriteSubattribute',
+    'addIndividuality',
+    'subIndividuality',
+    'fieldIndividuality',
+    'subFieldIndividuality',
+    'toFieldChangeField',
+    'toFieldSubIndividualityField',
+    'upDamageSpecial',
+    'upDamageEventPoint',
+    'addSpecialdamage',
+    'subSpecialdamage',
+    'upNpdamageIndividualitySum',
+    'tdTypeChange',
+    'tdTypeChangeArts',
+    'tdTypeChangeBuster',
+    'tdTypeChangeQuick',
+    'changeCommandCardType',
+    'overwriteSvtCardType',
+    'upSpecialdefence',
+    'downSpecialdefence',
+    'upDefence',
+    'downDefence',
+    'upDefencecommandall',
+    'downDefencecommandall',
+    'upDefenceCommanddamage',
+    'downDefenceCommanddamage',
+    'upDefenceDamage',
+    'downDefenceDamage',
+    'upDefenceNpdamage',
+    'downDefenceNpdamage',
+    'upDefenceCriticaldamage',
+    'downDefenceCriticaldamage',
+    'skillRankUp',
+    'buffRate',
+    'upBuffUseRate',
+    'downBuffUseRate',
+    'overwriteBuffUseRate',
+    'buffConvert',
+    'masterSkillValueUp',
+  };
+
+  /// Buffs that charge NP now or later (gauge, NP gain).
+  static const _npBuffs = {
+    'regainNp',
+    'upDropnp',
+    'upCommandnp',
+    'upDamagedropnp',
+    'upFuncgainNp',
+    'upGiveNp',
+    'regainNpUsedNoble',
+  };
+
+  static const _cooldownBuffs = {'shortenSkillAfterUseSkill', 'shortenUserEquipSkill'};
+
+  static bool _chargesNp(NiceFunction func) {
+    final name = func.funcType.name;
+    return name.startsWith('gainNp') ||
+        name == 'gainMultiplyNp' ||
+        func.buffs.any((b) => _npBuffs.contains(b.type.name));
+  }
+
+  /// Whether a function could matter for clearing: damage, NP charge or cooldown reduction.
+  /// Unknown triggers ("...Function" buffs) count, to stay on the safe side.
+  static bool _mattersForClear(NiceFunction func) {
+    final name = func.funcType.name;
+    if (_chargesNp(func)) return true;
+    if (name == 'shortenSkill' ||
+        name.startsWith('damage') ||
+        name == 'instantDeath' ||
+        name == 'forceInstantDeath') {
+      return true;
+    }
+    if (name == 'transformServant' || name.startsWith('lossHp')) return true; // NP change, HP-based damage
+    if (name == 'subState' && func.funcTargetType.isEnemy) return true; // removes enemy defenses
+    final onEnemy = func.funcTargetType.isEnemy || func.funcTargetTeam == FuncApplyTarget.enemy;
+    return func.buffs.any((buff) {
+      final type = buff.type.name;
+      // defense changes only matter on the enemies being hit, not on allies
+      if (type.contains('efence') && !onEnemy) return false;
+      return _damageBuffs.contains(type) || _cooldownBuffs.contains(type) || type.endsWith('Function');
+    });
+  }
+
+  /// How the solver treats a skill:
+  /// - never: nothing in it changes damage dealt, charges NP or reduces cooldowns (stars, healing, defense...)
+  /// - always: buffs on allies only, all lasting 3+ turns, no single target, no NP charge: use when ready
+  /// - choose: the search decides (use now, save, target)
+  static TgSkillUse skillUse(BaseSkill skill) {
+    final funcs = skill.functions;
+    if (!funcs.any(_mattersForClear)) return TgSkillUse.never;
+    if (funcs.any((f) => f.funcTargetType.needNormalOneTarget || f.funcTargetType == FuncTargetType.enemy)) {
+      return TgSkillUse.choose;
+    }
+    if (funcs.any(_chargesNp)) return TgSkillUse.choose;
+    final buffFuncs = funcs.where((f) => f.buffs.isNotEmpty).toList();
+    if (buffFuncs.isEmpty) return TgSkillUse.choose;
+    final longAllyBuffs = buffFuncs.every((f) {
+      if (f.funcTargetType.isEnemy || f.funcTargetTeam == FuncApplyTarget.enemy) return false;
+      final vals = f.svals.firstOrNull;
+      final turn = vals?.Turn ?? 0;
+      return turn >= 3 || (turn == -1 && (vals?.Count ?? -1) == -1);
+    });
+    return longAllyBuffs ? TgSkillUse.always : TgSkillUse.choose;
   }
 
   /// Decision summary for tests: whether [skill] may target allies other than this turn's main attacker.
