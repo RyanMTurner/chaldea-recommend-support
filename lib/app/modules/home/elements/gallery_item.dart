@@ -4,6 +4,7 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'package:chaldea/app/modules/bond/bond_bonus.dart';
+import 'package:chaldea/app/modules/battle/team_generator/team_generator.dart';
 import 'package:chaldea/app/modules/bond/formation_bond.dart';
 import 'package:chaldea/app/modules/creator/chara_list.dart';
 import 'package:chaldea/app/modules/creator/cv_list.dart';
@@ -138,6 +139,7 @@ class GalleryItem {
     npCharge,
     bondBonus,
     formationBond,
+    teamGenerator,
     statistics,
     if (!kIsWeb && AppInfo.isDebugOn) fakeGrandOrder,
     importData,
@@ -320,6 +322,13 @@ class GalleryItem {
     titleBuilder: () => S.current.team_bond,
     icon: FontAwesomeIcons.pix.data,
     page: const FormationBondPage(),
+    isDetail: false,
+  );
+  static GalleryItem teamGenerator = GalleryItem(
+    name: 'team_generator',
+    titleBuilder: () => 'Team Generator',
+    icon: FontAwesomeIcons.wandMagicSparkles.data,
+    page: const TeamGeneratorPage(),
     isDetail: false,
   );
   static GalleryItem statistics = GalleryItem(
