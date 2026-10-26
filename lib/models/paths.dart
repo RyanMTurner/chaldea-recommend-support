@@ -159,6 +159,14 @@ class PathManager {
   /// root dir
   String get appPath => _appPath!;
 
+  /// null until [initRootPath] has run (e.g. in a worker isolate before [initWorkerAppPath])
+  String? get appPathOrNull => _appPath;
+
+  /// Worker isolates don't run [initRootPath]: they only need to know where the main isolate keeps its data.
+  void initWorkerAppPath(String appPath) {
+    _appPath ??= appPath;
+  }
+
   String get gameDir => join(appPath, 'game');
 
   /// staging area for in-flight game data updates, mirrors gameDir layout

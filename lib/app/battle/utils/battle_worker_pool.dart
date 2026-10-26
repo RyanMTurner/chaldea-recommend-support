@@ -5,6 +5,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 
+import 'package:chaldea/app/api/atlas.dart';
 import 'package:chaldea/models/models.dart';
 import 'package:chaldea/packages/language.dart';
 import 'package:chaldea/packages/logger.dart';
@@ -94,6 +95,7 @@ class BattleWorkerPool {
         mainPort: _inbox.sendPort,
         gameData: gameData,
         languageCode: Language.current.code,
+        appPath: db.paths.appPathOrNull,
         index: 0,
         count: count,
         tag: tag,
@@ -151,6 +153,7 @@ class _WorkerBoot {
   final SendPort mainPort;
   final GameData gameData;
   final String languageCode;
+  final String? appPath;
   final int index;
   final int count;
   final String tag;
@@ -159,6 +162,7 @@ class _WorkerBoot {
     required this.mainPort,
     required this.gameData,
     required this.languageCode,
+    required this.appPath,
     required this.index,
     required this.count,
     required this.tag,
@@ -168,6 +172,7 @@ class _WorkerBoot {
     mainPort: mainPort,
     gameData: gameData,
     languageCode: languageCode,
+    appPath: appPath,
     index: index,
     count: count,
     tag: tag,
@@ -218,6 +223,10 @@ Future<void> _battleWorkerMain(_WorkerBoot boot) async {
     // Language.current would fall back to the system locale (needs WidgetsBinding), so set it explicitly
     await db.settings.setLanguage(Language.getLanguage(boot.languageCode) ?? Language.en);
     db.gameData = boot.gameData;
+    // skills/functions missing from the game data are fetched from the API: read the app's disk cache, keep new
+    // responses in this worker's memory
+    if (boot.appPath != null) db.paths.initWorkerAppPath(boot.appPath!);
+    AtlasApi.cacheManager.diskReadOnly = true;
   } catch (e) {
     boot.mainPort.send(_WorkerFailed(boot.index, '$e'));
     return;
