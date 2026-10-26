@@ -95,6 +95,10 @@ class _DownloadingTask {
 class ApiCacheManager {
   bool _initiated = false;
   final String? cacheKey;
+
+  /// Read the disk cache but never write to it: new responses stay in memory. Used on worker isolates, so they
+  /// don't overwrite the main isolate's cache index.
+  bool diskReadOnly = false;
   // final List<int> statusCodes = const [200];
   bool validateStatusCode(int status) {
     return status >= 200 && status < 300;
@@ -162,6 +166,7 @@ class ApiCacheManager {
   }
 
   Future<void> _saveCacheInfo() async {
+    if (diskReadOnly) return;
     final file = _infoFile;
     if (file == null) return;
     try {
@@ -204,14 +209,13 @@ class ApiCacheManager {
 
   Future<void> _saveEntry(String key, RequestOptions requestOptions, Response<List<int>> response) async {
     final bytes = response.data ?? [];
-    final file = _getCacheFile(key);
-
     final crc = getCrc32(bytes).toString();
-    _memoryCache[key] = bytes;
+    _memoryCache[key] = bytes; // before touching the disk, so the response is kept even if that fails
+    final file = diskReadOnly ? null : _getCacheFile(key);
 
     await file?.create(recursive: true);
     await file?.writeAsBytes(bytes);
-    final fp = _getCacheFile(key)?.path;
+    final fp = file?.path;
     if (!kReleaseMode && fp != null) print('caching api to $fp');
     _data[key] = ApiCachedInfo(
       key: key,
@@ -318,7 +322,7 @@ class ApiCacheManager {
         }
 
         _data.remove(key);
-        if (fileExist) {
+        if (fileExist && !diskReadOnly) {
           // may also exist even if it is false when file not checked
           await file?.deleteSafe();
         }
