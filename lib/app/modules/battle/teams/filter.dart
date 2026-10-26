@@ -16,7 +16,8 @@ enum TeamFilterMiscType {
   noSameSvt,
   noDoubleCastoria,
   noDoubleKoyan,
-  noDoubleOberon;
+  noDoubleOberon,
+  maxOneBond10;
 
   String get shownName {
     return switch (this) {
@@ -29,6 +30,7 @@ enum TeamFilterMiscType {
       noDoubleCastoria => S.current.team_no_double_castoria,
       noDoubleKoyan => S.current.team_no_double_koyan,
       noDoubleOberon => S.current.team_no_double_oberon,
+      maxOneBond10 => 'Max 1 Servant At Bond 10+',
     };
   }
 }
@@ -72,6 +74,26 @@ class TeamFilterData with FilterDataMixin {
     favorite = false;
     useSvtTdLv = 0;
     blockCEMLBOnly.clear();
+  }
+
+  /// Servants in [svts] that are at bond 10 or higher in the current account. Supports count too: the team's
+  /// creator may have borrowed a servant the player would bring from their own box.
+  static int countBond10Plus(Iterable<SvtSaveData?> svts) {
+    int count = 0;
+    for (final svt in svts) {
+      if (svt == null) continue;
+      final dbSvt = db.gameData.servantsById[svt.svtId];
+      if (dbSvt == null || dbSvt.collectionNo <= 0) continue;
+      if (db.curUser.svtStatusOf(dbSvt.collectionNo).bond >= 10) count++;
+    }
+    return count;
+  }
+
+  /// "Max 1 Servant At Bond 10+": at most one servant at bond 10+, or none if the team uses the same servant twice.
+  static bool allowsBond10(Iterable<SvtSaveData?> svts) {
+    final ids = svts.map((e) => e?.svtId ?? 0).where((e) => e > 0).toList();
+    final maxBond10 = ids.length != ids.toSet().length ? 0 : 1;
+    return countBond10Plus(svts) <= maxBond10;
   }
 
   bool filter(BattleShareData data) {
@@ -217,6 +239,11 @@ class TeamFilterData with FilterDataMixin {
           break;
         case TeamFilterMiscType.noDoubleOberon:
           if (data.formation.svts.where((e) => e?.svtId == 2800100).length >= 2) {
+            return false;
+          }
+          break;
+        case TeamFilterMiscType.maxOneBond10:
+          if (!allowsBond10(data.formation.svts)) {
             return false;
           }
           break;
