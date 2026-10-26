@@ -534,12 +534,16 @@ class _BestSupportsViewState extends State<_BestSupportsView> {
           leading: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('${(index + 1).toString().padRight(2)} ', style: kMonoStyle, textScaler: const TextScaler.linear(0.8)),
+              Text(
+                '${(index + 1).toString().padRight(2)} ',
+                style: kMonoStyle,
+                textScaler: const TextScaler.linear(0.8),
+              ),
               gain.support.iconBuilder(context: context, width: 32),
             ],
           ),
           title: Text(gain.support.lName.l, maxLines: 1, overflow: TextOverflow.ellipsis),
-          subtitle: Text('${S.current.damage} ${_fmt(gain.damage)}'),
+          subtitle: Text('${S.current.damage} ${_fmt(gain.damage)}  ${_refundStr(gain.attackNp)}'),
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -758,7 +762,11 @@ class _BestCeViewState extends State<_BestCeView> {
           leading: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('${(index + 1).toString().padRight(2)} ', style: kMonoStyle, textScaler: const TextScaler.linear(0.8)),
+              Text(
+                '${(index + 1).toString().padRight(2)} ',
+                style: kMonoStyle,
+                textScaler: const TextScaler.linear(0.8),
+              ),
               ce == null
                   ? const SizedBox(width: 32, height: 32, child: Icon(Icons.block))
                   : ce.iconBuilder(context: context, width: 32),
@@ -773,6 +781,7 @@ class _BestCeViewState extends State<_BestCeView> {
             [
               if (ce != null) 'Lv.${gain.lv}${gain.limitBreak ? ' MLB' : ''}',
               '${S.current.damage} ${_fmt(gain.damage)}',
+              _refundStr(gain.attackNp),
             ].join('  '),
           ),
           trailing: Row(
@@ -971,7 +980,11 @@ class _BestMcViewState extends State<_BestMcView> {
           leading: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text('${(index + 1).toString().padRight(2)} ', style: kMonoStyle, textScaler: const TextScaler.linear(0.8)),
+              Text(
+                '${(index + 1).toString().padRight(2)} ',
+                style: kMonoStyle,
+                textScaler: const TextScaler.linear(0.8),
+              ),
               mc == null
                   ? const SizedBox(width: 32, height: 32, child: Icon(Icons.block))
                   : mc.iconBuilder(context: context, width: 32),
@@ -983,7 +996,11 @@ class _BestMcViewState extends State<_BestMcView> {
             overflow: TextOverflow.ellipsis,
           ),
           subtitle: Text(
-            [if (mc != null) 'Lv.${gain.lv}', '${S.current.damage} ${_fmt(gain.damage)}'].join('  '),
+            [
+              if (mc != null) 'Lv.${gain.lv}',
+              '${S.current.damage} ${_fmt(gain.damage)}',
+              _refundStr(gain.attackNp),
+            ].join('  '),
           ),
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
@@ -1159,3 +1176,6 @@ enum _ParamType {
     }
   }
 }
+
+/// Same format as the result header: "Refund 7.98"
+String _refundStr(int attackNp) => '${S.current.np_refund_short} ${attackNp / 100}';
