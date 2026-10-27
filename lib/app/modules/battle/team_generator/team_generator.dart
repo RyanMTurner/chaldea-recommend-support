@@ -17,6 +17,7 @@ import 'package:chaldea/widgets/widgets.dart';
 import '../../mystic_code/mystic_code_list.dart';
 import '../battle_simulation.dart';
 import '../formation/team.dart';
+import 'recommend.dart';
 import 'solver.dart';
 import 'workers.dart';
 
@@ -145,6 +146,33 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
       validate: (v) => v >= min,
       onSubmit: (v) => _changed(() => update(v)),
     ).showDialog(context);
+  }
+
+  /// Lists recommended teams on the right half of the screen (a full page on narrow screens).
+  void _recommendTeams() {
+    router.pushPage(
+      TeamRecommendPage(teams: TeamRecommender.recommend(), onSelect: _selectTeam),
+      detail: true,
+      popDetail: true,
+    );
+  }
+
+  /// Fills [team] into the six slots with the player's own data for each servant (CEs cleared).
+  void _selectTeam(List<Servant> team) {
+    final svts = [
+      for (int index = 0; index < 6; index++)
+        if (team.getOrNull(index) case final svt?)
+          PlayerSvtData.base()..onSelectServant(svt, source: PreferPlayerSvtDataSource.current)
+        else
+          PlayerSvtData.base(),
+    ];
+    if (mounted) {
+      _changed(() => state.formation.updateSvts(svts));
+    } else {
+      state.formation.updateSvts(svts); // the page was closed: the setup is still kept for next time
+      state.result = null;
+    }
+    EasyLoading.showToast('Team selected');
   }
 
   Future<void> _solve() async {
@@ -332,10 +360,21 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
                       TextButton(onPressed: () => _solver?.cancel(), child: Text(S.current.cancel)),
                     ],
                   )
-                : FilledButton.icon(
-                    onPressed: _solve,
-                    icon: const Icon(Icons.auto_awesome),
-                    label: const Text('Solve'),
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: _recommendTeams,
+                        icon: const Icon(Icons.groups),
+                        label: const Text('Recommend Teams'),
+                      ),
+                      const SizedBox(height: 8),
+                      FilledButton.icon(
+                        onPressed: _solve,
+                        icon: const Icon(Icons.auto_awesome),
+                        label: const Text('Solve'),
+                      ),
+                    ],
                   ),
           ),
           if (state.result != null) _resultView(state.result!),
