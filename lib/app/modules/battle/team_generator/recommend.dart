@@ -44,13 +44,24 @@ class TeamRecommendPage extends StatelessWidget {
   }
 
   Widget _teamCard(BuildContext context, int index, List<Servant> team) {
+    // servant icon with its CE slot on the right (CEs aren't recommended yet: always empty)
     Widget slot(Servant? svt) => Expanded(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          svt == null
-              ? const SizedBox(width: 48, height: 52)
-              : svt.iconBuilder(context: context, width: 48, jumpToDetail: true),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Flexible(
+                child: svt == null
+                    ? const SizedBox(width: 44, height: 48)
+                    : svt.iconBuilder(context: context, width: 44, jumpToDetail: true),
+              ),
+              const SizedBox(width: 2),
+              Flexible(child: db.getIconImage(Atlas.common.emptyCeIcon, width: 32)),
+            ],
+          ),
           const SizedBox(height: 2),
           Text(
             svt?.lName.l ?? '',
