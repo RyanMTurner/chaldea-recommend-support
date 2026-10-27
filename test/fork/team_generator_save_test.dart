@@ -20,7 +20,12 @@ void main() async {
         workers: 3,
         quest: BattleQuestInfo(id: 94000000, phase: 3, enemyHash: 'abc'),
         formation: BattleTeamFormation.fromList(
-          svts: [SvtSaveData(svtId: 100100, lv: 90), null, null, SvtSaveData(svtId: 504500, supportType: .friend)],
+          svts: [
+            SvtSaveData(svtId: 100100, lv: 90),
+            null,
+            null,
+            SvtSaveData(svtId: 504500, supportType: .friend),
+          ],
           mysticCode: MysticCodeSaveData(mysticCodeId: 20, level: 7),
         ),
       );

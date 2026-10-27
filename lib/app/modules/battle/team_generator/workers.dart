@@ -404,8 +404,11 @@ class ParallelTeamGeneratorRun implements TeamGeneratorRun {
           } else if (_cancelled) {
             done.complete(_failure('Cancelled.'));
           } else {
+            // every worker gives the same reason (e.g. not enough turns, or no plan), unless one failed
             final error = message.result.message.startsWith('Error') ? ' (${message.result.message})' : '';
-            done.complete(_failure('No plan clears the quest within ${settings.maxTurns} turn(s).$error'));
+            done.complete(
+              _failure(error.isEmpty ? message.result.message : '${TeamGeneratorSolver.noPlanMessage}$error'),
+            );
           }
         }
       }

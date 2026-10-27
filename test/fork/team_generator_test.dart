@@ -1,11 +1,8 @@
 // Fork feature test:
-//  15. Team Generator: find a skill / Command Spell / NP plan that clears a quest with a fixed team
-//  16. Team Generator: Order Change (mystic code) support
-//  17. Team Generator: the incoming servant may save skills for later turns
+//  15. Team Generator: one turn per wave, NPs + the weakest face cards, NP users charged with as little waste
+//      as possible (skills, then Command Spells), buffs added one at a time until the wave is cleared
 //  18. Team Generator: pause at the time limit, "Add more time" continues the same search
 //  19. Team Generator: parallel search on worker isolates
-//  20. Team Generator: single-ally skill targets are searched (1-turn buffs stay on the attacker),
-//      any number of skills may stay unused
 //  21. Team Generator: skills that can't help are never used; long party buffs are used right away
 //
 // Run: flutter test test/fork --dart-define=APP_PATH=/path/to/app/data
@@ -20,9 +17,7 @@ import 'package:chaldea/models/models.dart';
 import '../test_init.dart';
 
 const int kAltria = 100100; // AOE Buster NP
-const int kQuest = 9300040603; // local free quest used by battle_test.dart
 const int kMerlin = 500800; // support NP, no damage
-const int kCombatUniform = 20; // mystic code with Order Change
 
 BattleTeamSetup altriaTeam() => BattleTeamSetup(
   svts: [
@@ -36,7 +31,18 @@ BattleTeamSetup altriaTeam() => BattleTeamSetup(
 void main() async {
   await initiateForTest();
 
-  final quest = db.gameData.questPhases[kQuest]!;
+  // the easiest 3-wave free quest in the local data (lowest toughest-enemy HP), so a lone Altria NP5
+  // clears every wave even with the minimum damage roll
+  int waveCount(QuestPhase q) => q.stages.map((e) => e.wave).fold(0, (a, b) => a > b ? a : b);
+  int toughest(QuestPhase q) => [
+    for (final stage in q.stages)
+      for (final enemy in stage.enemies) enemy.hp,
+  ].fold(0, (a, b) => a > b ? a : b);
+  final candidates = db.gameData.questPhases.values
+      .where((q) => q.type == QuestType.free && waveCount(q) == 3 && q.stages.every((s) => s.enemies.isNotEmpty))
+      .toList();
+  candidates.sort((a, b) => toughest(a) - toughest(b));
+  final quest = candidates.first;
   final waves = quest.stages.map((e) => e.wave).reduce((a, b) => a > b ? a : b);
 
   test('empty front line is rejected', () async {
@@ -48,7 +54,7 @@ void main() async {
     expect(result.success, isFalse);
   });
 
-  test('fewer turns than waves cannot clear', () async {
+  test('fewer turns than waves cannot clear (one turn per wave)', () async {
     final result = await TeamGeneratorSolver(
       quest: quest,
       formation: altriaTeam(),
@@ -72,8 +78,8 @@ void main() async {
       formation: altriaTeam(),
       settings: TeamGeneratorSettings(maxTurns: waves, maxCommandSpells: 3, timeLimitSeconds: 60),
     ).solve();
-    expect(result.success, isTrue, reason: result.message);
-    expect(result.turns.length, lessThanOrEqualTo(waves));
+    expect(result.success, isTrue, reason: 'quest ${quest.id}: ${result.message}');
+    expect(result.turns.length, waves, reason: 'one turn per wave');
     expect(result.commandSpellsUsed, inInclusiveRange(1, 3));
     expect(result.battle!.isBattleWin, isTrue);
     for (final turn in result.turns) {
@@ -98,82 +104,99 @@ void main() async {
     if (result.success) expect(result.commandSpellsUsed, lessThanOrEqualTo(1));
   });
 
-  group('Order Change', () {
-    // front line has no damage NP; the only attacker waits in the backup row
-    BattleTeamSetup swapTeam() => BattleTeamSetup(
+  group('Cards and NP order', () {
+    BattleTeamSetup trio() => BattleTeamSetup(
       svts: [
-        PlayerSvtData.id(kMerlin),
-        PlayerSvtData.id(kMerlin),
-        PlayerSvtData.id(kMerlin),
         PlayerSvtData.id(kAltria)
           ..lv = 90
           ..tdLv = 5,
+        PlayerSvtData.id(kMerlin),
+        PlayerSvtData.id(kMerlin),
       ],
-      mysticCodeData: MysticCodeData()
-        ..mysticCode = db.gameData.mysticCodes[kCombatUniform]!
-        ..level = 10,
+      mysticCodeData: MysticCodeData()..mysticCode = null,
     );
 
-    test('options list every front-line / backup pair when the mystic code can swap', () async {
+    test('NP users: each servant alone, then ordered pairs, then every order of three', () async {
       final battle = BattleData();
-      final team = swapTeam();
+      final team = trio();
       await battle.init(quest, team.svts, team.mysticCodeData);
-      expect(TeamGeneratorSolver.orderChangeSkillIndex(battle), isNotNull);
-      final options = TeamGeneratorSolver.orderChangeOptions(battle);
-      expect(options.first, isNull, reason: 'no swap is tried first');
-      expect(options.skip(1).toSet(), {
-        for (int onField = 0; onField < 3; onField++) (onField: onField, backup: 0),
-      });
-      expect(
-        TeamGeneratorSolver.availableSkills(battle).where((s) => s.isMysticCode).map((s) => s.skillIndex),
-        isNot(contains(TeamGeneratorSolver.orderChangeSkillIndex(battle))),
-        reason: 'Order Change is handled separately',
-      );
+      final orders = TeamGeneratorSolver.npOrders(battle);
+      expect(orders.take(3).toList(), [
+        [0],
+        [1],
+        [2],
+      ]);
+      expect(orders.skip(3).take(6).every((o) => o.length == 2 && o[0] != o[1]), isTrue);
+      expect(orders.skip(9).every((o) => o.length == 3 && o.toSet().length == 3), isTrue);
+      expect(orders.length, 3 + 6 + 6);
     });
 
-    test('incoming servant hold options: none first, then subsets of its ready skills', () async {
+    test('one NP + the two weakest face cards, avoiding Brave and color chains', () async {
       final battle = BattleData();
-      final team = swapTeam();
+      final team = trio();
       await battle.init(quest, team.svts, team.mysticCodeData);
-      const swap = (onField: 0, backup: 0);
-      final ready = [
-        for (final (index, info) in battle.backupAllyServants[0]!.skillInfoList.indexed)
-          if (info.skill != null && info.chargeTurn == 0) index,
+      expect(TeamGeneratorSolver.attackCards(battle, [0]), isNull, reason: 'NP not charged');
+
+      battle.onFieldAllyServants[0]!.np = ConstData.constants.fullTdPoint;
+      final cards = TeamGeneratorSolver.attackCards(battle, [0])!;
+      expect(cards.length, 3);
+      expect(cards[0].cardData.isTD, isTrue);
+      expect(cards.skip(1).every((c) => !c.cardData.isTD), isTrue);
+      expect(cards.every((c) => c.actor == cards[0].actor), isFalse, reason: 'no Brave Chain');
+
+      // Merlin (low ATK) has weaker cards than Altria, so the faces come from Merlin
+      final altria = battle.onFieldAllyServants[0]!;
+      expect(cards.skip(1).any((c) => c.actor == altria), isFalse);
+      final ratings = [for (final c in cards.skip(1)) TeamGeneratorSolver.cardRating(c.actor, c.cardData).$1];
+      final weakest = [
+        for (final svt in battle.nonnullPlayers)
+          for (final card in svt.getCards()) TeamGeneratorSolver.cardRating(svt, card).$1,
+      ]..sort();
+      expect(ratings.first, weakest.first);
+    });
+
+    test('solo servant: a Brave Chain is unavoidable and allowed', () async {
+      final battle = BattleData();
+      final team = altriaTeam();
+      await battle.init(quest, team.svts, team.mysticCodeData);
+      battle.onFieldAllyServants[0]!.np = ConstData.constants.fullTdPoint;
+      expect(TeamGeneratorSolver.attackCards(battle, [0])?.length, 3);
+    });
+
+    test('NP charge choice: fewest Command Spells, then least overflow, then fewest skills', () {
+      // options of a source with no target: the gain of the single NP user
+      List<List<int>> gives(int gain) => [
+        [gain],
       ];
-      expect(ready, isNotEmpty);
+      final cs = gives(10000);
+      List<int?>? pick(int need, List<List<List<int>>> sources) =>
+          TeamGeneratorSolver.pickCharges([need], sources, [for (final s in sources) identical(s, cs)]);
 
-      expect(TeamGeneratorSolver.incomingHeldSets(battle, null, 2), [<int>{}], reason: 'no swap, nothing to hold');
-      expect(TeamGeneratorSolver.incomingHeldSets(battle, swap, 0), [<int>{}]);
+      expect(pick(5000, [gives(3000), gives(2000), gives(5000), cs]), [null, null, 0, null], reason: 'one skill');
+      expect(
+        pick(7000, [gives(2000), gives(2000), gives(5000), cs]),
+        anyOf([
+          [null, 0, 0, null],
+          [0, null, 0, null],
+        ]),
+        reason: '20+50: no waste',
+      );
+      expect(pick(7000, [gives(5000), gives(5000), cs]), [0, 0, null], reason: 'waste beats a Command Spell');
+      expect(pick(10000, [gives(2000), cs]), [null, 0], reason: 'only the Command Spell gets there');
+      expect(pick(10000, [gives(2000)]), isNull);
 
-      final sets = TeamGeneratorSolver.incomingHeldSets(battle, swap, 2);
-      expect(sets.first, isEmpty);
-      final n = ready.length;
-      expect(sets.length, 1 + n + n * (n - 1) ~/ 2);
-      for (final set in sets) {
-        expect(set.length, lessThanOrEqualTo(2));
-        expect(ready.toSet().containsAll(set), isTrue);
-      }
-      for (int i = 1; i < sets.length; i++) {
-        expect(sets[i - 1].length <= sets[i].length, isTrue, reason: 'smallest sets first');
-      }
-    });
-
-    test('swaps the backup attacker in, replays and exports x<front><sub>', () async {
-      final result = await TeamGeneratorSolver(
-        quest: quest,
-        formation: swapTeam(),
-        settings: TeamGeneratorSettings(maxTurns: waves, maxCommandSpells: 3, timeLimitSeconds: 120),
-      ).solve();
-      expect(result.success, isTrue, reason: result.message);
-      final first = result.turns.first;
-      expect(first.orderChange, isNotNull);
-      expect(first.orderChange!.backup, 0);
-      expect(first.npSlots, contains(first.orderChange!.onField), reason: 'the incoming Altria fires');
-      expect(first.steps.any((step) => step.startsWith('Order Change')), isTrue);
-
-      final command = FgaCommandExporter(result.battle!.recorder.records).export();
-      expect(command, contains('x${first.orderChange!.onField + 1}1'));
-      expect(result.battle!.replayDataRecord.replaceMemberIndexes, isNotEmpty, reason: 'replay data has the swap');
+      // single-ally skills: one option per NP user; two NP users needing 20 each
+      final either = [
+        [2000, 0],
+        [0, 2000],
+      ];
+      expect(
+        TeamGeneratorSolver.pickCharges([2000, 2000], [either, either], [false, false]),
+        anyOf([
+          [0, 1],
+          [1, 0],
+        ]),
+      );
     });
   });
 
@@ -279,14 +302,14 @@ void main() async {
           settings: TeamGeneratorSettings(maxTurns: waves, maxCommandSpells: 0, timeLimitSeconds: 120, workers: 2),
         ).solve();
         expect(result.success, isFalse);
-        expect(result.message, contains('No plan clears'));
+        expect(result.message, TeamGeneratorSolver.noPlanMessage);
       } finally {
         await TeamGeneratorWorkerPool.disposeCurrent();
       }
     });
   });
 
-  group('Targets and unused skills', () {
+  group('Ally targets', () {
     bool singleAlly(NiceFunction f) =>
         f.funcTargetTeam != FuncApplyTarget.enemy && f.funcTargetType.needNormalOneTarget;
     bool npCharge(NiceFunction f) => f.funcType.name.startsWith('gainNp');
@@ -326,20 +349,8 @@ void main() async {
     });
 
     test('skills without a single-ally effect have no target choice', () {
-      final skill = db.gameData.servantsById[kAltria]!.skills.firstWhere(
-        (skill) => !skill.functions.any(singleAlly),
-      );
+      final skill = db.gameData.servantsById[kAltria]!.skills.firstWhere((skill) => !skill.functions.any(singleAlly));
       expect(TeamGeneratorSolver.mayTargetAnyAlly(skill), isFalse);
-    });
-
-    test('the default plan (every skill used) is still found first when it works', () async {
-      final result = await TeamGeneratorSolver(
-        quest: quest,
-        formation: altriaTeam(),
-        settings: TeamGeneratorSettings(maxTurns: waves, maxCommandSpells: 3, timeLimitSeconds: 60, workers: 0),
-      ).solve();
-      expect(result.success, isTrue, reason: result.message);
-      expect(result.turns.first.steps.any((step) => step.startsWith('Not used')), isFalse);
     });
   });
 
@@ -381,7 +392,7 @@ void main() async {
       expect(TeamGeneratorSolver.skillUse(skill!), TgSkillUse.always);
     });
 
-    test('NP charge and single-target skills stay a search choice', () {
+    test('NP charge and single-target skills are not used right away', () {
       final charge = findSkill(
         (skill) =>
             skill.functions.any((f) => f.funcType == FuncType.gainNp && f.funcTargetType == FuncTargetType.ptAll),
@@ -390,33 +401,25 @@ void main() async {
       expect(TeamGeneratorSolver.skillUse(charge!), TgSkillUse.choose);
 
       final single = findSkill(
-        (skill) => skill.functions.every(
-          (f) =>
-              f.funcTargetType == FuncTargetType.ptOne &&
-              f.buffs.isNotEmpty &&
-              f.buffs.every((b) => b.type == BuffType.upAtk) &&
-              f.svals.firstOrNull?.Turn == 3,
+        (skill) => skill.functions.any(
+          (f) => f.funcTargetType == FuncTargetType.ptOne && f.buffs.any((b) => b.type == BuffType.upAtk),
         ),
       );
       expect(single, isNotNull);
       expect(TeamGeneratorSolver.skillUse(single!), TgSkillUse.choose);
     });
 
-    test('enemy debuffs stay a search choice (wasted on the next wave if used early)', () {
+    test('enemy debuffs are not used right away (wasted on the next wave if used early)', () {
       final debuff = findSkill(
-        (skill) => skill.functions.every(
-          (f) =>
-              f.funcTargetType == FuncTargetType.enemyAll &&
-              f.buffs.isNotEmpty &&
-              f.buffs.every((b) => b.type == BuffType.downDefence) &&
-              f.svals.firstOrNull?.Turn == 3,
+        (skill) => skill.functions.any(
+          (f) => f.funcTargetType == FuncTargetType.enemyAll && f.buffs.any((b) => b.type == BuffType.downDefence),
         ),
       );
       expect(debuff, isNotNull);
       expect(TeamGeneratorSolver.skillUse(debuff!), TgSkillUse.choose);
     });
 
-    test('never-used skills are left out of the turn', () async {
+    test('never-used skills are left out', () async {
       final battle = BattleData();
       final team = altriaTeam();
       await battle.init(quest, team.svts, team.mysticCodeData);

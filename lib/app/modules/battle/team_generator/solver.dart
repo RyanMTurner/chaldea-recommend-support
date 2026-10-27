@@ -4,11 +4,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 
-import 'package:tuple/tuple.dart';
-
-import 'package:chaldea/app/battle/interactions/_delegate.dart';
 import 'package:chaldea/app/battle/models/battle.dart';
-import 'package:chaldea/app/battle/utils/battle_logger.dart';
 import 'package:chaldea/models/models.dart';
 import 'package:chaldea/utils/utils.dart';
 
@@ -16,11 +12,12 @@ import '../simulation/fga_export.dart';
 
 /// User settings for the Team Generator solver.
 class TeamGeneratorSettings {
+  /// The solver clears one wave per turn, so this only has to be at least the number of waves.
   int maxTurns;
   int maxCommandSpells;
   int timeLimitSeconds;
 
-  /// No longer limits the search (any number of skills may stay unused); kept for compatibility.
+  /// Not used by the solver; kept for compatibility.
   int maxHeldSkills;
 
   /// Background worker isolates; 0 = search on the UI thread.
@@ -64,11 +61,16 @@ class TgSkillRef {
   final bool needsAllyTarget;
 
   /// Single-ally skill that may target anyone (NP charge or a buff lasting more than 1 turn).
-  /// Otherwise it only goes to this turn's main attacker.
   final bool anyAllyTarget;
 
-  /// Party/self buffs lasting 3+ turns without NP charge: used as soon as ready, never saved.
+  /// Party/self buffs lasting 3+ turns without NP charge: used at the start of every wave when ready.
   final bool alwaysUse;
+
+  /// Charges the NP gauge right away: only used to charge the NP users.
+  final bool chargesNp;
+
+  /// Every buff in it lasts 1 turn.
+  final bool oneTurnOnly;
   final String name;
 
   const TgSkillRef({
@@ -77,52 +79,19 @@ class TgSkillRef {
     required this.needsAllyTarget,
     this.anyAllyTarget = false,
     this.alwaysUse = false,
+    this.chargesNp = false,
+    this.oneTurnOnly = false,
     required this.name,
   });
 
   bool get isMysticCode => slot == null;
 }
 
-/// Order Change: front-line slot (0-2) swapped with backup index (0-2).
+/// Order Change: front-line slot (0-2) swapped with backup index (0-2). Not used by the solver for now.
 typedef TgOrderChange = ({int onField, int backup});
 
 /// How the solver treats a skill, see [TeamGeneratorSolver.skillUse].
 enum TgSkillUse { never, always, choose }
-
-/// One way to play a turn. The default is "use every ready skill, single-ally skills on this turn's
-/// main attacker"; [cost] counts the departures from it (each unused skill or other target = 1).
-class _TurnChoice {
-  final List<int> fire;
-  final TgOrderChange? swap;
-
-  /// Indices into the turn's skill list (front line + mystic code) left unused.
-  final Set<int> held;
-
-  /// Skill indices (0-2) the incoming servant leaves unused.
-  final Set<int> incomingHeld;
-
-  /// Non-default targets by skill key ('f<index>' front/mystic code, 'i<skillIndex>' incoming servant).
-  final Map<String, int> targets;
-  final int cost;
-
-  const _TurnChoice({
-    required this.fire,
-    required this.swap,
-    required this.held,
-    required this.incomingHeld,
-    required this.targets,
-    required this.cost,
-  });
-}
-
-/// A per-skill decision with its non-default options.
-class _Decision {
-  final String key;
-
-  /// null = leave the skill unused, otherwise target this slot.
-  final List<int?> alternatives;
-  const _Decision(this.key, this.alternatives);
-}
 
 /// What the solver did in one turn.
 class TgTurnPlan {
@@ -133,6 +102,8 @@ class TgTurnPlan {
   /// Skill indices (0-2) the incoming servant saved for later turns.
   final Set<int> incomingHeld;
   final List<int> commandSpellTargets;
+
+  /// Front-line slots firing their NP, in firing order.
   final List<int> npSlots;
 
   /// Human readable steps in order, with servant names at the time of the action.
@@ -188,23 +159,80 @@ class TeamGeneratorResult {
   int get commandSpellsUsed => turns.fold(0, (sum, turn) => sum + turn.commandSpellTargets.length);
 }
 
-/// Finds a skill / Order Change / Command Spell / NP sequence that clears [quest] with a fixed team.
+/// Skills, Command Spells and steps of the turn being built.
+class _TurnLog {
+  final List<(TgSkillRef, int?)> skills;
+  final List<int> commandSpells;
+  final List<String> steps;
+
+  _TurnLog([List<(TgSkillRef, int?)>? skills, List<int>? commandSpells, List<String>? steps])
+    : skills = skills ?? [],
+      commandSpells = commandSpells ?? [],
+      steps = steps ?? [];
+
+  _TurnLog copy() => _TurnLog(List.of(skills), List.of(commandSpells), List.of(steps));
+}
+
+/// One way to use an NP charge source: its target (null = no target) and the NP each NP user gains.
+class _ChargeOption {
+  final int? target;
+  final List<int> gains;
+  const _ChargeOption(this.target, this.gains);
+}
+
+/// An NP charge skill, or a Command Spell when [skill] is null.
+class _ChargeSource {
+  final TgSkillRef? skill;
+  final List<_ChargeOption> options;
+  const _ChargeSource(this.skill, this.options);
+
+  bool get isCommandSpell => skill == null;
+}
+
+enum _Outcome {
+  /// the quest is cleared
+  solved,
+
+  /// this wave was cleared but a later one could not be
+  clearedLaterFailed,
+  notCleared,
+
+  /// cancelled or stopped at the time limit
+  stopped,
+}
+
+class _AttackResult {
+  final _Outcome outcome;
+
+  /// HP left on the wave's enemies when it wasn't cleared.
+  final int enemyHp;
+  const _AttackResult(this.outcome, [this.enemyHp = 0]);
+}
+
+/// Finds a plan that clears [quest] with a fixed team, one turn per wave. Order Change isn't used.
 ///
-/// Worst case only: minimum damage roll and only 100% effects (the battle defaults),
-/// no critical hits and no face cards, so a found plan clears every time in the simulator.
-/// Depth-first search turn by turn; a turn either clears its wave or, when turns are to spare,
-/// may be a charge turn. Each branch is simulated with the real battle engine and rewound with
-/// battle snapshots.
+/// Every turn plays 3 cards: the NPs plus the weakest face cards of the 15 on the field (least damage, then
+/// least NP gain), so a plan doesn't depend on face cards. Worst case only: minimum damage roll, only 100%
+/// effects, no critical hits.
 ///
-/// Within a turn: skills of servants that don't fire (and of the servant about to be swapped out),
-/// other mystic code skills, Order Change, the incoming servant's skills, then the firing servants' skills.
+/// For each wave:
+///  1. use every ready party buff lasting 3+ turns that doesn't charge NP
+///  2. charge the NP users to 100%: fewest Command Spells, then least NP above 100%, then fewest skills
+///  3. attack: NP A + worst card + second-worst card
+///  4. if the wave survives, add the other buffs lasting more than 1 turn one at a time and attack again after
+///     each (a single-ally buff goes to the NP user that leaves the least enemy HP)
+///  5. then the same with 1-turn buffs
+///  6. NP users are tried in this order: servant 1, 2, 3 alone; every ordered pair (NP A, NP B, second-worst
+///     card); every order of all three NPs
+///  7. the first way that clears the wave moves on to the next wave. If a later wave can't be cleared, the
+///     earlier wave goes on with its next NP user(s); when nothing is left the quest can't be solved this way
 ///
-/// Each turn starts from "use every ready skill, single-ally skills on this turn's main attacker" and may
-/// depart from it: any skill may stay unused, and single-ally skills that charge NP or give buffs lasting
-/// more than 1 turn may target any front-line servant (1-turn buffs always go to the main attacker).
-/// Plans with fewer departures in total are tried first (iterative deepening).
+/// Command Spells are a last resort: a wave first tries every NP user combination charged with skills only, and
+/// only then the combinations that need Command Spells. Later waves (usually the toughest) get to use them
+/// before an earlier wave does.
 ///
-/// Limits: ST NPs hit the default target, and skills with options use the engine's default (no choice).
+/// Skills that can't help (nothing that changes damage, charges NP or reduces cooldowns) are never used, and
+/// NP charge skills are only used in step 2.
 class TeamGeneratorSolver implements TeamGeneratorRun {
   final QuestPhase quest;
   final BattleTeamSetup formation;
@@ -224,9 +252,11 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
     this.partitionCount = 1,
   }) : _timeLimitSeconds = settings.timeLimitSeconds;
 
-  /// Parallel runs: this solver only explores first-turn options where `option % partitionCount == partitionIndex`.
+  /// Parallel runs: this solver only tries the first wave's NP users where `index % partitionCount == partitionIndex`.
   final int partitionIndex;
   final int partitionCount;
+
+  static const noPlanMessage = 'No plan found: no NP combination with the weakest face cards clears every wave.';
 
   bool _cancelled = false;
   @override
@@ -283,10 +313,6 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
   int simulations = 0;
   late final int _totalWaves = Maths.max(quest.stages.map((e) => e.wave), 1);
 
-  /// Swap the battle engine performs on the next Order Change.
-  TgOrderChange? _pendingSwap;
-
-
   @override
   Future<TeamGeneratorResult> solve() async {
     _watch
@@ -297,31 +323,21 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
     if (team.svts.take(3).every((svt) => svt.svt == null)) {
       return _result(false, 'No servant in the front line.');
     }
+    if (_totalWaves > settings.maxTurns) {
+      return _result(
+        false,
+        'The quest has $_totalWaves waves and each wave takes a turn: Maximum Turns must be at least $_totalWaves.',
+      );
+    }
     final battle = BattleData();
     battle.options
       ..random = ConstData.constants.attackRateRandomMin
       ..threshold = 1000
       ..manualAllySkillTarget = false;
-    battle.delegate = BattleDelegate()
-      ..replaceMember = (onField, backup) async {
-        final swap = _pendingSwap;
-        if (swap == null) return null;
-        final out = onField.getOrNull(swap.onField);
-        final incoming = backup.getOrNull(swap.backup);
-        if (out == null || incoming == null) return null;
-        return Tuple2(out, incoming);
-      };
     await battle.init(quest, team.svts, team.mysticCodeData);
 
     final plans = <TgTurnPlan>[];
-    bool found = false;
-    // Plans closest to the default first: every turn may depart from it, the total is capped by
-    // [budget], which grows until a plan is found or no plan has more departures to try.
-    for (int budget = 0; ; budget++) {
-      _budgetLimited = false;
-      found = await _search(battle, plans, 0, budget);
-      if (found || _cancelled || !_budgetLimited) break;
-    }
+    final found = await _solveWave(battle, plans, 0);
     _watch.stop();
     if (found) {
       return TeamGeneratorResult(
@@ -337,187 +353,16 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
     }
     if (_reachedTimeLimit && _cancelled) return _result(false, 'No plan found within ${_timeLimitSeconds}s.');
     if (_cancelled) return _result(false, 'Cancelled.');
-    return _result(false, 'No plan clears the quest within ${settings.maxTurns} turn(s).');
+    return _result(false, noPlanMessage);
   }
 
-  TeamGeneratorResult _result(bool success, String message, {List<TgTurnPlan> turns = const [], BattleData? battle}) {
+  TeamGeneratorResult _result(bool success, String message) {
+    _watch.stop();
     return TeamGeneratorResult(
       success: success,
       message: message,
-      turns: turns,
-      battle: battle,
       simulations: simulations,
       elapsedMilliseconds: _watch.elapsedMilliseconds,
-    );
-  }
-
-  /// Set when some turn had more departures available than the budget allowed.
-  bool _budgetLimited = false;
-
-  Future<bool> _search(BattleData battle, List<TgTurnPlan> plans, int csUsed, int budget) async {
-    if (battle.isBattleWin) return true;
-    if (battle.nonnullPlayers.isEmpty || !await _continueAfterTimeLimit()) return false;
-
-    final remainingTurns = settings.maxTurns - plans.length;
-    final remainingWaves = _totalWaves - battle.waveCount + 1;
-    if (remainingTurns <= 0 || remainingWaves > remainingTurns) return false;
-    final mustClear = remainingWaves == remainingTurns;
-
-    final skills = availableSkills(battle);
-    final swaps = orderChangeOptions(battle);
-    final fireSets = _fireSets(battle, mustClear, swaps.length > 1).toList();
-    final decisions = {
-      for (final fire in fireSets)
-        for (final swap in swaps) (fire, swap): _decisions(battle, skills, fire, swap),
-    };
-    final firstTurn = plans.isEmpty;
-    int option = 0;
-    for (int cost = 0; cost <= budget; cost++) {
-      for (final fire in fireSets) {
-        for (final swap in swaps) {
-          final turnDecisions = decisions[(fire, swap)]!;
-          if (cost == budget && turnDecisions.length > budget) _budgetLimited = true;
-          for (final picked in _combinations(turnDecisions, cost)) {
-            if (firstTurn && (option++ % partitionCount) != partitionIndex) continue;
-            final choice = _choice(fire, swap, picked, cost);
-            final waveBefore = battle.waveCount;
-            final depth = battle.snapshots.length;
-            battle.pushSnapshot();
-            TgTurnPlan? plan;
-            try {
-              plan = await _applyTurn(battle, skills, choice, settings.maxCommandSpells - csUsed);
-            } catch (e) {
-              plan = null; // engine refused an action, treat as a dead branch
-            }
-            _pendingSwap = null;
-            simulations++;
-            if (plan != null) {
-              final cleared = battle.isBattleWin || battle.waveCount > waveBefore;
-              if (!mustClear || cleared) {
-                plans.add(plan);
-                if (await _search(battle, plans, csUsed + plan.commandSpellTargets.length, budget - cost)) {
-                  return true;
-                }
-                plans.removeLast();
-              }
-            }
-            _restore(battle, depth);
-            if (simulations % 8 == 0) {
-              battle.battleLogger.logs.clear();
-              onProgress?.call(simulations, _watch.elapsedMilliseconds);
-              await Future.delayed(Duration.zero); // keep the UI responsive
-            }
-            if (!await _continueAfterTimeLimit()) return false;
-          }
-        }
-      }
-    }
-    return false;
-  }
-
-  /// Main attacker the turn would target by default: the first firing slot whose occupant at NP time
-  /// (the incoming servant if that slot is swapped) has a damage NP.
-  static int _defaultTarget(BattleData battle, List<int> fire, TgOrderChange? swap) {
-    for (final slot in fire) {
-      final occupant = swap != null && slot == swap.onField
-          ? battle.backupAllyServants.getOrNull(swap.backup)
-          : battle.onFieldAllyServants.getOrNull(slot);
-      if (occupant != null && _isDamageNp(occupant)) return slot;
-    }
-    return fire.firstOrNull ?? 0;
-  }
-
-  /// Everything that may depart from the default this turn: leaving a skill unused, or sending a
-  /// single-ally skill that may target anyone to another front-line servant.
-  static List<_Decision> _decisions(
-    BattleData battle,
-    List<TgSkillRef> skills,
-    List<int> fire,
-    TgOrderChange? swap,
-  ) {
-    final defaultTarget = _defaultTarget(battle, fire, swap);
-    final occupied = [
-      for (int slot = 0; slot < 3; slot++)
-        if (battle.onFieldAllyServants.getOrNull(slot) != null) slot,
-    ];
-    final swapOut = swap?.onField;
-    final decisions = <_Decision>[];
-    for (final (index, skill) in skills.indexed) {
-      if (skill.alwaysUse) continue; // no choice: used right away
-      // used before the swap: the leaving servant's own slot would waste the effect
-      final usedBeforeSwap = skill.isMysticCode || !fire.contains(skill.slot) || skill.slot == swapOut;
-      decisions.add(
-        _Decision('f$index', [
-          null,
-          if (skill.needsAllyTarget && skill.anyAllyTarget)
-            for (final slot in occupied)
-              if (slot != defaultTarget && !(usedBeforeSwap && slot == swapOut)) slot,
-        ]),
-      );
-    }
-    if (swap != null) {
-      final incoming = battle.backupAllyServants.getOrNull(swap.backup);
-      for (final (index, info) in (incoming?.skillInfoList ?? <BattleSkillInfoData>[]).indexed) {
-        final skill = info.skill;
-        if (skill == null || info.chargeTurn > 0) continue;
-        if (skillUse(skill) != TgSkillUse.choose) continue; // never used, or always used right away
-        final anyTarget = _needsAllyTarget(skill) && _anyAllyTarget(skill);
-        decisions.add(
-          _Decision('i$index', [
-            null,
-            if (anyTarget)
-              for (final slot in occupied)
-                if (slot != defaultTarget) slot,
-          ]),
-        );
-      }
-    }
-    return decisions;
-  }
-
-  /// Every way to pick [count] decisions and one non-default option for each, in a fixed order.
-  static Iterable<List<(String, int?)>> _combinations(List<_Decision> decisions, int count) sync* {
-    if (count == 0) {
-      yield const [];
-      return;
-    }
-    Iterable<List<(String, int?)>> build(int start, int left) sync* {
-      if (left == 0) {
-        yield const [];
-        return;
-      }
-      for (int i = start; i <= decisions.length - left; i++) {
-        for (final alternative in decisions[i].alternatives) {
-          for (final rest in build(i + 1, left - 1)) {
-            yield [(decisions[i].key, alternative), ...rest];
-          }
-        }
-      }
-    }
-
-    yield* build(0, count);
-  }
-
-  static _TurnChoice _choice(List<int> fire, TgOrderChange? swap, List<(String, int?)> picked, int cost) {
-    final held = <int>{};
-    final incomingHeld = <int>{};
-    final targets = <String, int>{};
-    for (final (key, alternative) in picked) {
-      if (alternative != null) {
-        targets[key] = alternative;
-      } else if (key.startsWith('f')) {
-        held.add(int.parse(key.substring(1)));
-      } else {
-        incomingHeld.add(int.parse(key.substring(1)));
-      }
-    }
-    return _TurnChoice(
-      fire: fire,
-      swap: swap,
-      held: held,
-      incomingHeld: incomingHeld,
-      targets: targets,
-      cost: cost,
     );
   }
 
@@ -527,13 +372,425 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
     }
   }
 
-  static bool _isOrderChange(BaseSkill skill) =>
-      skill.functions.any((func) => func.funcType == FuncType.replaceMember);
+  static String _nameOf(BattleData battle, int slot) =>
+      battle.onFieldAllyServants.getOrNull(slot)?.lBattleName ?? 'Slot ${slot + 1}';
 
-  /// Ready-to-use skills of the current turn, front line first, then mystic code (Order Change excluded).
-  static List<TgSkillRef> availableSkills(BattleData battle, {Iterable<int> slots = const [0, 1, 2]}) {
+  /// Tries the ways to clear the current wave in order (see the class doc). True once the quest is cleared;
+  /// the battle is then left in its final state.
+  Future<bool> _solveWave(BattleData battle, List<TgTurnPlan> plans, int csUsed) async {
+    if (battle.isBattleWin) return true;
+    if (plans.length >= settings.maxTurns || battle.nonnullPlayers.isEmpty) return false;
+    if (!await _continueAfterTimeLimit()) return false;
+
+    final start = battle.snapshots.length;
+    battle.pushSnapshot();
+
+    // 1. party buffs lasting 3+ turns
+    final base = _TurnLog();
+    for (final skill in availableSkills(battle)) {
+      if (skill.alwaysUse) await _useSkill(battle, base, skill, null);
+    }
+
+    final afterBuffs = battle.snapshots.length;
+    // Command Spells are a last resort: every way without them first, then only the ways that need them. A
+    // wave reached through this one tries its own options (Command Spells included) before this wave spends
+    // one, so they tend to be saved for the later, tougher waves.
+    final commandSpellsLeft = settings.maxCommandSpells - csUsed;
+    for (final withCommandSpells in [false, if (commandSpellsLeft > 0) true]) {
+      for (final (index, users) in npOrders(battle).indexed) {
+        if (plans.isEmpty && index % partitionCount != partitionIndex) continue;
+        if (_cancelled) break;
+        battle.pushSnapshot();
+        final outcome = await _tryUsers(battle, plans, csUsed, users, base.copy(), withCommandSpells);
+        if (outcome == _Outcome.solved) return true; // keep the final state
+        _restore(battle, afterBuffs);
+        if (outcome == _Outcome.stopped) break;
+      }
+      if (_cancelled) break;
+    }
+    _restore(battle, start);
+    return false;
+  }
+
+  /// Steps 2-5 with [users] firing their NPs in this order. With [withCommandSpells], only when charging needs
+  /// at least one Command Spell (the ways without were already tried).
+  Future<_Outcome> _tryUsers(
+    BattleData battle,
+    List<TgTurnPlan> plans,
+    int csUsed,
+    List<int> users,
+    _TurnLog log,
+    bool withCommandSpells,
+  ) async {
+    // 2. charge the NP users
+    final charged = await _charge(
+      battle,
+      users,
+      withCommandSpells ? settings.maxCommandSpells - csUsed : 0,
+      log,
+      requireCommandSpell: withCommandSpells,
+    );
+    if (!charged) return _Outcome.notCleared;
+
+    // 3. attack with what we have
+    var result = await _attack(battle, plans, csUsed, users, log);
+    if (result.outcome != _Outcome.notCleared) return result.outcome;
+
+    // 4. buffs lasting more than 1 turn, 5. 1-turn buffs; one at a time, attacking after each
+    for (final oneTurn in [false, true]) {
+      final buffs = [
+        for (final skill in availableSkills(battle))
+          if (!skill.alwaysUse && !skill.chargesNp && skill.oneTurnOnly == oneTurn) skill,
+      ];
+      for (final skill in buffs) {
+        final targets = skill.needsAllyTarget ? users : <int?>[null];
+        if (targets.length == 1) {
+          await _useSkill(battle, log, skill, targets.single);
+          result = await _attack(battle, plans, csUsed, users, log);
+          if (result.outcome != _Outcome.notCleared) return result.outcome;
+          continue;
+        }
+        // several NP users: keep the target that leaves the least enemy HP
+        int? bestTarget;
+        int bestHp = -1;
+        for (final target in targets) {
+          final depth = battle.snapshots.length;
+          battle.pushSnapshot();
+          final probe = log.copy();
+          await _useSkill(battle, probe, skill, target);
+          result = await _attack(battle, plans, csUsed, users, probe);
+          if (result.outcome == _Outcome.solved) return result.outcome;
+          _restore(battle, depth);
+          if (result.outcome != _Outcome.notCleared) return result.outcome;
+          if (bestHp < 0 || result.enemyHp < bestHp) {
+            bestHp = result.enemyHp;
+            bestTarget = target;
+          }
+        }
+        await _useSkill(battle, log, skill, bestTarget); // its attack was already tried
+      }
+    }
+    return _Outcome.notCleared;
+  }
+
+  /// Step 2: charge every NP user to 100% with NP charge skills and Command Spells.
+  /// Picks the fewest Command Spells, then the least NP above 100%, then the fewest skills.
+  /// What each source gives is measured one source at a time from the current state.
+  /// [requireCommandSpell]: fails unless the cheapest way uses a Command Spell.
+  Future<bool> _charge(
+    BattleData battle,
+    List<int> users,
+    int commandSpellsLeft,
+    _TurnLog log, {
+    bool requireCommandSpell = false,
+  }) async {
+    final full = ConstData.constants.fullTdPoint;
+    int npOf(int slot) => battle.onFieldAllyServants.getOrNull(slot)?.np ?? 0;
+    final need = [for (final slot in users) max(0, full - npOf(slot))];
+    if (requireCommandSpell && need.every((n) => n == 0)) return false;
+
+    if (need.any((n) => n > 0)) {
+      Future<List<int>> measure(Future<void> Function() action) async {
+        final before = [for (final slot in users) npOf(slot)];
+        final depth = battle.snapshots.length;
+        battle.pushSnapshot();
+        try {
+          await action();
+          return [for (final (i, slot) in users.indexed) npOf(slot) - before[i]];
+        } catch (e) {
+          return List.filled(users.length, 0);
+        } finally {
+          _restore(battle, depth);
+        }
+      }
+
+      final sources = <_ChargeSource>[];
+      for (final skill in availableSkills(battle)) {
+        if (!skill.chargesNp) continue;
+        final options = <_ChargeOption>[];
+        for (final target in skill.needsAllyTarget ? users : <int?>[null]) {
+          final gains = await measure(() => _activate(battle, skill, target));
+          if (gains.any((g) => g > 0)) options.add(_ChargeOption(target, gains));
+        }
+        if (options.isNotEmpty) sources.add(_ChargeSource(skill, options));
+      }
+      final commandSpells = min(commandSpellsLeft, users.length);
+      if (commandSpells > 0) {
+        final options = <_ChargeOption>[];
+        for (final target in users) {
+          final gains = await measure(() => _activateCommandSpell(battle, target));
+          if (gains.any((g) => g > 0)) options.add(_ChargeOption(target, gains));
+        }
+        if (options.isNotEmpty) {
+          for (int i = 0; i < commandSpells; i++) {
+            sources.add(_ChargeSource(null, options));
+          }
+        }
+      }
+
+      final picked = pickCharges(
+        need,
+        [for (final source in sources) source.options.map((o) => o.gains).toList()],
+        [for (final source in sources) source.isCommandSpell],
+      );
+      if (picked == null) return false;
+      if (requireCommandSpell && !picked.indexed.any((e) => e.$2 != null && sources[e.$1].isCommandSpell)) {
+        return false;
+      }
+      for (final (index, option) in picked.indexed) {
+        if (option == null) continue;
+        final source = sources[index];
+        final target = source.options[option].target;
+        if (source.isCommandSpell) {
+          await _activateCommandSpell(battle, target!);
+          log.commandSpells.add(target);
+          log.steps.add('Command Spell → ${_nameOf(battle, target)}');
+        } else {
+          await _useSkill(battle, log, source.skill!, target);
+        }
+      }
+    }
+    return users.every((slot) => battle.onFieldAllyServants.getOrNull(slot)?.canNP() == true);
+  }
+
+  /// Chooses an option (or none) for each charge source so that every NP user gains at least [need].
+  /// [options] per source: the gain of each NP user for each option. Cost order: fewest Command Spells, then
+  /// least overflow, then fewest skills. Returns the option index per source (null = unused), or null if [need]
+  /// can't be met.
+  @visibleForTesting
+  static List<int?>? pickCharges(List<int> need, List<List<List<int>>> options, List<bool> isCommandSpell) {
+    List<int?>? best;
+    (int, int, int)? bestCost;
+    final choice = List<int?>.filled(options.length, null);
+    bool better((int, int, int) a, (int, int, int) b) =>
+        a.$1 != b.$1 ? a.$1 < b.$1 : (a.$2 != b.$2 ? a.$2 < b.$2 : a.$3 < b.$3);
+
+    void search(int index, List<int> gained, int commandSpells, int skills) {
+      if (bestCost != null && commandSpells > bestCost!.$1) return;
+      final met = [for (final (i, n) in need.indexed) gained[i] >= n].every((e) => e);
+      if (met || index == options.length) {
+        if (!met) return;
+        int waste = 0;
+        for (final (i, n) in need.indexed) {
+          waste += gained[i] - n;
+        }
+        final cost = (commandSpells, waste, skills);
+        if (bestCost == null || better(cost, bestCost!)) {
+          bestCost = cost;
+          best = List.of(choice);
+        }
+        return; // more sources only add waste
+      }
+      search(index + 1, gained, commandSpells, skills);
+      for (final (o, gains) in options[index].indexed) {
+        choice[index] = o;
+        search(
+          index + 1,
+          [for (final (i, g) in gained.indexed) g + gains[i]],
+          commandSpells + (isCommandSpell[index] ? 1 : 0),
+          skills + (isCommandSpell[index] ? 0 : 1),
+        );
+      }
+      choice[index] = null;
+    }
+
+    search(0, List.filled(need.length, 0), 0, 0);
+    return best;
+  }
+
+  /// Plays the turn: the NPs of [users] in order plus the weakest face cards. If the wave is cleared, goes on
+  /// with the next wave; the battle is restored unless the quest gets cleared.
+  Future<_AttackResult> _attack(
+    BattleData battle,
+    List<TgTurnPlan> plans,
+    int csUsed,
+    List<int> users,
+    _TurnLog log,
+  ) async {
+    if (!await _continueAfterTimeLimit()) return const _AttackResult(_Outcome.stopped);
+    final actions = attackCards(battle, users);
+    if (actions == null) return const _AttackResult(_Outcome.notCleared, 1 << 30);
+    final wave = battle.waveCount;
+    final depth = battle.snapshots.length;
+    battle.pushSnapshot();
+    final cardsStep = 'Cards: ${actions.map((a) => _cardLabel(a)).join(', ')}';
+    bool played = true;
+    try {
+      await battle.playerTurn(actions);
+    } catch (e) {
+      played = false; // the engine refused an action
+    }
+    simulations++;
+    if (simulations % 8 == 0) {
+      battle.battleLogger.logs.clear();
+      onProgress?.call(simulations, _watch.elapsedMilliseconds);
+      await Future.delayed(Duration.zero); // keep the UI responsive
+    }
+    final cleared = played && (battle.isBattleWin || battle.waveCount > wave);
+    if (!cleared) {
+      final hp = Maths.sum(battle.nonnullEnemies.map((e) => max(0, e.hp)));
+      _restore(battle, depth);
+      return _AttackResult(_Outcome.notCleared, hp);
+    }
+    plans.add(
+      TgTurnPlan(
+        wave: wave,
+        skills: List.of(log.skills),
+        orderChange: null,
+        commandSpellTargets: List.of(log.commandSpells),
+        npSlots: List.of(users),
+        steps: [...log.steps, cardsStep],
+      ),
+    );
+    if (await _solveWave(battle, plans, csUsed + log.commandSpells.length)) {
+      return const _AttackResult(_Outcome.solved);
+    }
+    plans.removeLast();
+    _restore(battle, depth);
+    return _AttackResult(_cancelled ? _Outcome.stopped : _Outcome.clearedLaterFailed);
+  }
+
+  static String _cardLabel(CombatAction action) {
+    final name = action.actor.lBattleName;
+    if (action.cardData.isTD) return 'NP $name';
+    return '${_cardTypeName(action.cardData.cardType)} ($name)';
+  }
+
+  static String _cardTypeName(int cardType) {
+    if (CardType.isQuick(cardType)) return 'Quick';
+    if (CardType.isArts(cardType)) return 'Arts';
+    if (CardType.isBuster(cardType)) return 'Buster';
+    return 'Card';
+  }
+
+  /// NP users in the order they are tried: each servant alone, then every ordered pair, then every order of
+  /// all three.
+  static List<List<int>> npOrders(BattleData battle) {
+    final slots = [
+      for (int slot = 0; slot < 3; slot++)
+        if (battle.onFieldAllyServants.getOrNull(slot)?.getNPCard() != null) slot,
+    ];
+    final orders = <List<int>>[];
+    void permute(List<int> current, int size) {
+      if (current.length == size) {
+        orders.add(List.of(current));
+        return;
+      }
+      for (final slot in slots) {
+        if (current.contains(slot)) continue;
+        current.add(slot);
+        permute(current, size);
+        current.removeLast();
+      }
+    }
+
+    for (int size = 1; size <= slots.length; size++) {
+      permute([], size);
+    }
+    return orders;
+  }
+
+  /// Weakest first: least damage (ATK × card type), then least NP gain.
+  static (int, int) cardRating(BattleServantData svt, CommandCardData card) {
+    final type = card.cardType;
+    final damage = CardType.isBuster(type) ? 150 : (CardType.isQuick(type) ? 80 : 100);
+    final np = CardType.isArts(type) ? 3 : (CardType.isQuick(type) ? 1 : 0);
+    return (svt.atk * damage, card.npGain * np);
+  }
+
+  static int _color(int cardType) {
+    if (CardType.isQuick(cardType)) return CardType.quick.value;
+    if (CardType.isArts(cardType)) return CardType.arts.value;
+    if (CardType.isBuster(cardType)) return CardType.buster.value;
+    return cardType;
+  }
+
+  /// Three cards of one servant (Brave Chain) or one color: they would add damage or NP.
+  static bool _isChain(List<CombatAction> cards) {
+    if (cards.length < 3) return false;
+    final sameServant = cards.every((c) => c.actor.uniqueId == cards.first.actor.uniqueId);
+    final sameColor = cards.every((c) => _color(c.cardData.cardType) == _color(cards.first.cardData.cardType));
+    return sameServant || sameColor;
+  }
+
+  /// The turn's 3 cards: the NP cards of [users] in order, then the weakest face cards of the front line
+  /// (1 NP: worst, second worst; 2 NPs: second worst; 3 NPs: none). Face cards that would make a Brave or
+  /// same-color chain are skipped when there are others. Null if one of the NPs can't be used.
+  static List<CombatAction>? attackCards(BattleData battle, List<int> users) {
+    final nps = <CombatAction>[];
+    for (final slot in users) {
+      final svt = battle.onFieldAllyServants.getOrNull(slot);
+      final card = svt?.getNPCard();
+      if (svt == null || card == null || !svt.canNP()) return null;
+      nps.add(CombatAction(svt, card));
+    }
+    if (nps.length >= 3) return nps;
+
+    final faces = <(CombatAction, (int, int))>[
+      for (final svt in battle.nonnullPlayers)
+        for (final card in svt.getCards()) (CombatAction(svt, card), cardRating(svt, card)),
+    ];
+    faces.sort((a, b) => a.$2.$1 != b.$2.$1 ? a.$2.$1 - b.$2.$1 : a.$2.$2 - b.$2.$2);
+    final sorted = [for (final face in faces) face.$1];
+    if (sorted.isEmpty) return nps;
+
+    if (nps.length == 2) {
+      final valid = sorted.where((face) => !_isChain([...nps, face])).toList();
+      final pool = valid.isNotEmpty ? valid : sorted;
+      return [...nps, pool.getOrNull(1) ?? pool.first];
+    }
+    for (int i = 0; i < sorted.length; i++) {
+      for (int j = i + 1; j < sorted.length; j++) {
+        final cards = [...nps, sorted[i], sorted[j]];
+        if (!_isChain(cards)) return cards;
+      }
+    }
+    return [...nps, ...sorted.take(2)];
+  }
+
+  Future<void> _useSkill(BattleData battle, _TurnLog log, TgSkillRef skill, int? target) async {
+    final user = skill.isMysticCode ? 'MC' : _nameOf(battle, skill.slot!);
+    final targetName = target == null ? null : _nameOf(battle, target);
+    await _activate(battle, skill, target);
+    log.skills.add((skill, target));
+    log.steps.add('$user S${skill.skillIndex + 1}${targetName == null ? '' : ' → $targetName'}');
+  }
+
+  static Future<void> _activate(BattleData battle, TgSkillRef skill, int? target) async {
+    if (target != null) battle.playerTargetIndex = target;
+    if (skill.isMysticCode) {
+      await battle.activateMysticCodeSkill(skill.skillIndex);
+    } else {
+      await battle.activateSvtSkill(skill.slot!, skill.skillIndex);
+    }
+  }
+
+  static Future<void> _activateCommandSpell(BattleData battle, int target) async {
+    battle.playerTargetIndex = target;
+    await battle.commandSpellReleaseNP();
+  }
+
+  static bool _isOrderChange(BaseSkill skill) => skill.functions.any((func) => func.funcType == FuncType.replaceMember);
+
+  /// Ready-to-use skills, front line first, then mystic code. Skills that can't help and Order Change are left out.
+  static List<TgSkillRef> availableSkills(BattleData battle) {
     final skills = <TgSkillRef>[];
-    for (final slot in slots) {
+    TgSkillRef? ref(BaseSkill skill, int? slot, int index, String name) {
+      final use = skillUse(skill);
+      if (use == TgSkillUse.never) return null;
+      return TgSkillRef(
+        slot: slot,
+        skillIndex: index,
+        needsAllyTarget: _needsAllyTarget(skill),
+        anyAllyTarget: _anyAllyTarget(skill),
+        alwaysUse: use == TgSkillUse.always,
+        chargesNp: skill.functions.any(_isNpCharge),
+        oneTurnOnly: _oneTurnOnly(skill),
+        name: name,
+      );
+    }
+
+    for (int slot = 0; slot < 3; slot++) {
       final svt = battle.onFieldAllyServants.getOrNull(slot);
       if (svt == null) continue;
       for (int index = 0; index < svt.skillInfoList.length; index++) {
@@ -541,96 +798,19 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
         final skill = info.skill;
         if (skill == null || info.chargeTurn > 0) continue;
         if (!battle.canUseSvtSkillIgnoreCoolDown(slot, index)) continue;
-        final use = skillUse(skill);
-        if (use == TgSkillUse.never) continue;
-        skills.add(
-          TgSkillRef(
-            slot: slot,
-            skillIndex: index,
-            needsAllyTarget: _needsAllyTarget(skill),
-            anyAllyTarget: _anyAllyTarget(skill),
-            alwaysUse: use == TgSkillUse.always,
-            name: '${svt.lBattleName} S${index + 1}',
-          ),
-        );
+        final r = ref(skill, slot, index, '${svt.lBattleName} S${index + 1}');
+        if (r != null) skills.add(r);
       }
     }
-    if (slots.length < 3) return skills; // only a servant's own skills requested
     for (int index = 0; index < battle.masterSkillInfo.length; index++) {
       final info = battle.masterSkillInfo[index];
       final skill = info.skill;
       if (skill == null || info.chargeTurn > 0 || _isOrderChange(skill)) continue;
       if (!battle.canUseMysticCodeSkillIgnoreCoolDown(index)) continue;
-      final use = skillUse(skill);
-      if (use == TgSkillUse.never) continue;
-      skills.add(
-        TgSkillRef(
-          slot: null,
-          skillIndex: index,
-          needsAllyTarget: _needsAllyTarget(skill),
-          anyAllyTarget: _anyAllyTarget(skill),
-          alwaysUse: use == TgSkillUse.always,
-          name: 'MC S${index + 1}',
-        ),
-      );
+      final r = ref(skill, null, index, 'MC S${index + 1}');
+      if (r != null) skills.add(r);
     }
     return skills;
-  }
-
-  /// Index of a ready Order Change mystic code skill, if any.
-  static int? orderChangeSkillIndex(BattleData battle) {
-    for (int index = 0; index < battle.masterSkillInfo.length; index++) {
-      final info = battle.masterSkillInfo[index];
-      final skill = info.skill;
-      if (skill == null || info.chargeTurn > 0 || !_isOrderChange(skill)) continue;
-      if (battle.canUseMysticCodeSkillIgnoreCoolDown(index)) return index;
-    }
-    return null;
-  }
-
-  /// null (no swap) first, then every possible front-line/backup pair.
-  static List<TgOrderChange?> orderChangeOptions(BattleData battle) {
-    final options = <TgOrderChange?>[null];
-    if (orderChangeSkillIndex(battle) == null) return options;
-    for (int onField = 0; onField < 3; onField++) {
-      final out = battle.onFieldAllyServants.getOrNull(onField);
-      if (out == null || !out.canOrderChange()) continue;
-      for (int backup = 0; backup < battle.backupAllyServants.length; backup++) {
-        final incoming = battle.backupAllyServants[backup];
-        if (incoming == null || !incoming.canOrderChange()) continue;
-        options.add((onField: onField, backup: backup));
-      }
-    }
-    return options;
-  }
-
-  /// Skills the incoming servant may save for later: none first, then every subset up to [maxHeld].
-  /// Read from the backup row before the swap (skills off cooldown).
-  static List<Set<int>> incomingHeldSets(BattleData battle, TgOrderChange? swap, int maxHeld) {
-    if (swap == null) return const [{}];
-    final incoming = battle.backupAllyServants.getOrNull(swap.backup);
-    if (incoming == null) return const [{}];
-    final ready = <int>[
-      for (final (index, info) in incoming.skillInfoList.indexed)
-        if (info.skill != null && info.chargeTurn == 0) index,
-    ];
-    final sets = <Set<int>>[{}];
-    for (int size = 1; size <= min(maxHeld, ready.length); size++) {
-      void build(int start, List<int> current) {
-        if (current.length == size) {
-          sets.add(current.toSet());
-          return;
-        }
-        for (int i = start; i < ready.length; i++) {
-          current.add(ready[i]);
-          build(i + 1, current);
-          current.removeLast();
-        }
-      }
-
-      build(0, []);
-    }
-    return sets;
   }
 
   static bool _needsAllyTarget(BaseSkill skill) {
@@ -645,8 +825,14 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
     return name.startsWith('gainNp') || name == 'gainMultiplyNp';
   }
 
+  /// Every function with buffs gives buffs lasting exactly 1 turn.
+  static bool _oneTurnOnly(BaseSkill skill) {
+    final buffFuncs = skill.functions.where((f) => f.buffs.isNotEmpty).toList();
+    return buffFuncs.isNotEmpty && buffFuncs.every((f) => f.svals.firstOrNull?.Turn == 1);
+  }
+
   /// A single-ally skill may target anyone if it charges NP or gives something other than 1-turn buffs;
-  /// a skill whose single-ally effects are all 1-turn buffs only goes to this turn's main attacker.
+  /// a skill whose single-ally effects are all 1-turn buffs only goes to the attacker.
   static bool _anyAllyTarget(BaseSkill skill) {
     final funcs = skill.functions.where(_isSingleAllyFunc).toList();
     if (funcs.isEmpty) return false;
@@ -750,10 +936,7 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
   static bool _mattersForClear(NiceFunction func) {
     final name = func.funcType.name;
     if (_chargesNp(func)) return true;
-    if (name == 'shortenSkill' ||
-        name.startsWith('damage') ||
-        name == 'instantDeath' ||
-        name == 'forceInstantDeath') {
+    if (name == 'shortenSkill' || name.startsWith('damage') || name == 'instantDeath' || name == 'forceInstantDeath') {
       return true;
     }
     if (name == 'transformServant' || name.startsWith('lossHp')) return true; // NP change, HP-based damage
@@ -769,8 +952,9 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
 
   /// How the solver treats a skill:
   /// - never: nothing in it changes damage dealt, charges NP or reduces cooldowns (stars, healing, defense...)
-  /// - always: buffs on allies only, all lasting 3+ turns, no single target, no NP charge: use when ready
-  /// - choose: the search decides (use now, save, target)
+  /// - always: buffs on allies only, all lasting 3+ turns, no single target, no NP charge: used at the start
+  ///   of every wave when ready
+  /// - choose: NP charge (step 2) or a buff tried one at a time (steps 4 and 5)
   static TgSkillUse skillUse(BaseSkill skill) {
     final funcs = skill.functions;
     if (!funcs.any(_mattersForClear)) return TgSkillUse.never;
@@ -789,160 +973,9 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
     return longAllyBuffs ? TgSkillUse.always : TgSkillUse.choose;
   }
 
-  /// Decision summary for tests: whether [skill] may target allies other than this turn's main attacker.
+  /// For tests: whether [skill] may target allies other than the attacker.
   @visibleForTesting
   static bool mayTargetAnyAlly(BaseSkill skill) => _needsAllyTarget(skill) && _anyAllyTarget(skill);
-
-  static bool _isDamageNp(BattleServantData svt) {
-    final td = svt.getCurrentNP();
-    return td != null && td.damageType != TdEffectFlag.support;
-  }
-
-  /// Which front-line slots fire their NP this turn (whoever is in the slot at NP time).
-  /// Smallest sets first; a clearing turn needs a damage NP unless an Order Change may bring one in.
-  Iterable<List<int>> _fireSets(BattleData battle, bool mustClear, bool canSwap) sync* {
-    final slots = <int>[
-      for (int slot = 0; slot < 3; slot++)
-        if (battle.onFieldAllyServants.getOrNull(slot) != null) slot,
-    ];
-    final subsets = <List<int>>[];
-    for (int mask = 1; mask < (1 << slots.length); mask++) {
-      subsets.add([
-        for (int i = 0; i < slots.length; i++)
-          if (mask & (1 << i) != 0) slots[i],
-      ]);
-    }
-    subsets.sort((a, b) => a.length - b.length);
-    for (final subset in subsets) {
-      final hasDamage = subset.any((slot) {
-        final svt = battle.onFieldAllyServants[slot]!;
-        return svt.getNPCard() != null && _isDamageNp(svt);
-      });
-      if (mustClear && !hasDamage && !canSwap) continue;
-      yield subset;
-    }
-    if (!mustClear) yield const []; // charge turn: skills only, then skip
-  }
-
-  Future<TgTurnPlan?> _applyTurn(
-    BattleData battle,
-    List<TgSkillRef> skills,
-    _TurnChoice choice,
-    int commandSpellsLeft,
-  ) async {
-    final fire = choice.fire;
-    final swap = choice.swap;
-    final held = choice.held;
-    final incomingHeld = choice.incomingHeld;
-    final wave = battle.waveCount;
-    final steps = <String>[];
-    String nameOf(int slot) => battle.onFieldAllyServants.getOrNull(slot)?.lBattleName ?? 'Slot ${slot + 1}';
-
-    // main attacker: first firing slot whose occupant has a damage NP (the incoming servant if swapped in)
-    int primaryAfterSwap() {
-      for (final slot in fire) {
-        final svt = battle.onFieldAllyServants.getOrNull(slot);
-        if (svt != null && _isDamageNp(svt)) return slot;
-      }
-      return fire.firstOrNull ?? 0;
-    }
-
-    final used = <(TgSkillRef, int?)>[];
-    Future<void> useSkill(TgSkillRef skill, String key) async {
-      int? target;
-      if (skill.needsAllyTarget) {
-        target = choice.targets[key] ?? primaryAfterSwap();
-        battle.playerTargetIndex = target;
-      }
-      if (skill.isMysticCode) {
-        await battle.activateMysticCodeSkill(skill.skillIndex);
-      } else {
-        if (battle.onFieldAllyServants.getOrNull(skill.slot!) == null) return;
-        await battle.activateSvtSkill(skill.slot!, skill.skillIndex);
-      }
-      used.add((skill, target));
-      steps.add('${skill.isMysticCode ? skill.name : '${nameOf(skill.slot!)} S${skill.skillIndex + 1}'}'
-          '${target == null ? '' : ' → ${nameOf(target)}'}');
-    }
-
-    final swapOut = swap?.onField;
-    bool before(TgSkillRef s) => !s.isMysticCode && (!fire.contains(s.slot) || s.slot == swapOut);
-    // 1. supports and the servant leaving, 2. mystic code
-    for (final (i, skill) in skills.indexed) {
-      if (!held.contains(i) && before(skill)) await useSkill(skill, 'f$i');
-    }
-    for (final (i, skill) in skills.indexed) {
-      if (!held.contains(i) && skill.isMysticCode) await useSkill(skill, 'f$i');
-    }
-    // 3. Order Change and the incoming servant's skills
-    if (swap != null) {
-      final ocIndex = orderChangeSkillIndex(battle);
-      if (ocIndex == null) return null;
-      final outName = nameOf(swap.onField);
-      final inName = battle.backupAllyServants.getOrNull(swap.backup)?.lBattleName;
-      _pendingSwap = swap;
-      await battle.activateMysticCodeSkill(ocIndex);
-      _pendingSwap = null;
-      if (inName == null || battle.onFieldAllyServants.getOrNull(swap.onField)?.lBattleName != inName) {
-        return null; // swap did not happen
-      }
-      steps.add('Order Change: $outName ⇄ $inName');
-      for (final skill in availableSkills(battle, slots: [swap.onField])) {
-        if (incomingHeld.contains(skill.skillIndex)) continue;
-        await useSkill(skill, 'i${skill.skillIndex}');
-      }
-      if (incomingHeld.isNotEmpty) {
-        steps.add('$inName saves ${(incomingHeld.toList()..sort()).map((i) => 'S${i + 1}').join(', ')} for later');
-      }
-    }
-    // 4. the servants who fire
-    for (final (i, skill) in skills.indexed) {
-      if (!held.contains(i) && !skill.isMysticCode && !before(skill)) await useSkill(skill, 'f$i');
-    }
-
-    if (held.isNotEmpty) {
-      steps.add('Not used: ${[for (final i in held.toList()..sort()) skills[i].name].join(', ')}');
-    }
-
-    final commandSpells = <int>[];
-    for (final slot in fire) {
-      final svt = battle.onFieldAllyServants.getOrNull(slot);
-      if (svt == null || svt.getNPCard() == null) return null;
-      if (!svt.canNP()) {
-        if (commandSpells.length >= commandSpellsLeft || svt.isNpFull()) return null;
-        battle.playerTargetIndex = slot;
-        await battle.commandSpellReleaseNP();
-        commandSpells.add(slot);
-        steps.add('Command Spell → ${nameOf(slot)}');
-        if (!svt.canNP()) return null;
-      }
-    }
-
-    if (fire.isEmpty) {
-      await battle.skipTurn();
-      steps.add('No NP (charge turn)');
-    } else {
-      final damageSlots = fire.where((slot) => _isDamageNp(battle.onFieldAllyServants[slot]!)).toList();
-      final npOrder = [
-        ...fire.where((slot) => !damageSlots.contains(slot)), // buff NPs before damage NPs
-        ...damageSlots,
-      ];
-      steps.add('NP: ${npOrder.map(nameOf).join(', ')}');
-      await battle.playerTurn([
-        for (final slot in npOrder)
-          CombatAction(battle.onFieldAllyServants[slot]!, battle.onFieldAllyServants[slot]!.getNPCard()!),
-      ]);
-    }
-    return TgTurnPlan(
-      wave: wave,
-      skills: used,
-      orderChange: swap,
-      incomingHeld: incomingHeld,
-      commandSpellTargets: commandSpells,
-      npSlots: fire,
-      steps: steps,
-    );
-  }
 
   /// Battle Simulation share data: team, quest and the recorded actions, for replay.
   static BattleShareData toShareData(QuestPhase quest, BattleTeamSetup formation, BattleData battle) {

@@ -11,6 +11,7 @@ import 'package:chaldea/app/battle/utils/battle_logger.dart';
 import 'package:chaldea/models/models.dart';
 import 'package:chaldea/packages/logger.dart';
 import 'package:chaldea/utils/utils.dart';
+
 import 'td_workers.dart';
 
 // (ATK * 0.23 * 宝具伤害倍率 * 指令卡伤害倍率
