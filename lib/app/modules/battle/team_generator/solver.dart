@@ -4,6 +4,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 
+import 'package:chaldea/app/api/atlas.dart';
 import 'package:chaldea/app/battle/models/battle.dart';
 import 'package:chaldea/models/models.dart';
 import 'package:chaldea/utils/utils.dart';
@@ -63,11 +64,18 @@ class TgSkillRef {
   /// Single-ally skill that may target anyone (NP charge or a buff lasting more than 1 turn).
   final bool anyAllyTarget;
 
-  /// Party/self buffs lasting 3+ turns without NP charge: used at the start of every wave when ready.
+  /// Party/self buffs lasting 3+ turns or NP over time, without NP charge: used at the start of every wave when ready.
   final bool alwaysUse;
 
   /// Charges the NP gauge right away: only used to charge the NP users.
   final bool chargesNp;
+
+  /// Gives NP regen (NP at the end of every turn): counts as charge when pre-charging for the next wave.
+  final bool addsNpRegen;
+
+  /// Buffs on its user or one ally (no NP charge), all lasting 3+ turns: used before the attack when they land on
+  /// one of this turn's NP users.
+  final bool longPersonalBuff;
 
   /// Every buff in it lasts 1 turn.
   final bool oneTurnOnly;
@@ -80,6 +88,8 @@ class TgSkillRef {
     this.anyAllyTarget = false,
     this.alwaysUse = false,
     this.chargesNp = false,
+    this.addsNpRegen = false,
+    this.longPersonalBuff = false,
     this.oneTurnOnly = false,
     required this.name,
   });
@@ -218,8 +228,12 @@ class _AttackResult {
 /// For each wave:
 ///  1. use every ready party buff lasting 3+ turns that doesn't charge NP
 ///  2. charge the NP users to 100%: fewest Command Spells, then least NP above 100%, then fewest skills. If a
-///     later wave can't be cleared, the next-cheapest way to charge is tried before other NP users
-///  3. attack: NP A + worst card + second-worst card
+///     later wave can't be cleared, the next-cheapest way to charge is tried before other NP users. After every
+///     way without, the ways that also pre-charge a servant who doesn't fire this turn to 100% (with the NP
+///     charge skills left, no Command Spells) so it can fire next wave. Pre-charging counts NP regen (one tick,
+///     at the end of this turn), and skills that add NP regen can be used for it
+///  3. use the buffs lasting 3+ turns that land on this turn's NP users (self-buffs of an NP user, single-ally
+///     buffs on NP A), then attack: NP A + worst card + second-worst card
 ///  4. if the wave survives, add the other buffs lasting more than 1 turn one at a time and attack again after
 ///     each (a single-ally buff goes to the NP user that leaves the least enemy HP)
 ///  5. then the same with 1-turn buffs
@@ -243,12 +257,16 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
   /// Called when the time limit is reached; the search waits (state kept) until [addTime] or [cancel].
   final void Function(int simulations, int elapsedMilliseconds)? onPaused;
 
+  /// Debugging: called with one line per attempt (every attack and every NP combination that can't be charged).
+  final void Function(String line)? trace;
+
   TeamGeneratorSolver({
     required this.quest,
     required this.formation,
     required this.settings,
     this.onProgress,
     this.onPaused,
+    this.trace,
     this.partitionIndex = 0,
     this.partitionCount = 1,
   }) : _timeLimitSeconds = settings.timeLimitSeconds;
@@ -336,6 +354,7 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
       ..threshold = 1000
       ..manualAllySkillTarget = false;
     await battle.init(quest, team.svts, team.mysticCodeData);
+    await prefetchTriggeredSkills(battle);
 
     final plans = <TgTurnPlan>[];
     final found = await _solveWave(battle, plans, 0);
@@ -447,17 +466,67 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
       ];
     }
 
+    if (trace != null && choices.isEmpty) {
+      trace!(
+        'W${battle.waveCount} ${users.map((slot) => _nameOf(battle, slot)).join(' + ')}: no way to charge '
+        '(need ${need.map((n) => n / 100).join(', ')}%${withCommandSpells ? ', with Command Spells' : ''})',
+      );
+    }
     final beforeCharge = battle.snapshots.length;
-    for (final choice in choices) {
-      battle.pushSnapshot();
-      final attempt = log.copy();
-      await _applyCharge(battle, sources, choice, attempt);
-      final outcome = users.every((slot) => battle.onFieldAllyServants.getOrNull(slot)?.canNP() == true)
-          ? await _attackWithBuffs(battle, plans, csUsed, users, attempt)
-          : _Outcome.notCleared;
-      if (outcome == _Outcome.solved) return outcome; // keep the final state
-      _restore(battle, beforeCharge);
-      if (outcome == _Outcome.stopped) return outcome;
+    // every way to charge without pre-charging first, then with (not on the last wave: nothing comes next)
+    for (final preCharge in [false, if (battle.waveCount < _totalWaves) true]) {
+      for (final choice in choices) {
+        battle.pushSnapshot();
+        final attempt = log.copy();
+        await _applyCharge(battle, sources, choice, attempt);
+        final ready = users.every((slot) => battle.onFieldAllyServants.getOrNull(slot)?.canNP() == true);
+        final outcome = !ready
+            ? _Outcome.notCleared
+            : preCharge
+            ? await _preChargeAndAttack(battle, plans, csUsed, users, attempt)
+            : await _attackWithBuffs(battle, plans, csUsed, users, attempt);
+        if (outcome == _Outcome.solved) return outcome; // keep the final state
+        _restore(battle, beforeCharge);
+        if (outcome == _Outcome.stopped) return outcome;
+      }
+    }
+    return _Outcome.notCleared;
+  }
+
+  /// Pre-charge: also charges a servant who doesn't fire this turn to 100% with the NP charge skills left (no
+  /// Command Spells), so it can fire next wave. Each other servant and each way to charge it is tried, cheapest
+  /// first, then steps 3-5 as usual.
+  Future<_Outcome> _preChargeAndAttack(
+    BattleData battle,
+    List<TgTurnPlan> plans,
+    int csUsed,
+    List<int> users,
+    _TurnLog log,
+  ) async {
+    final full = ConstData.constants.fullTdPoint;
+    final start = battle.snapshots.length;
+    for (int slot = 0; slot < 3; slot++) {
+      if (users.contains(slot)) continue;
+      final svt = battle.onFieldAllyServants.getOrNull(slot);
+      // NP regen ticks at the end of this turn, before the next wave
+      if (svt == null || svt.getNPCard() == null || svt.np + npRegen(svt) >= full) continue;
+      // read before measuring: rewinding the battle swaps in copies, so [svt] goes stale
+      final need = full - svt.np - npRegen(svt);
+      final sources = await _chargeSources(battle, [slot], 0, nextTurn: true);
+      final ways = chargeChoices(
+        [need],
+        [for (final source in sources) source.options.map((o) => o.gains).toList()],
+        [for (final source in sources) source.isCommandSpell],
+      );
+      for (final way in ways) {
+        battle.pushSnapshot();
+        final attempt = log.copy()..steps.add('Pre-charge ${_nameOf(battle, slot)} for the next wave:');
+        await _applyCharge(battle, sources, way, attempt);
+        final outcome = await _attackWithBuffs(battle, plans, csUsed, users, attempt);
+        if (outcome == _Outcome.solved) return outcome; // keep the final state
+        _restore(battle, start);
+        if (outcome == _Outcome.stopped) return outcome;
+      }
     }
     return _Outcome.notCleared;
   }
@@ -470,6 +539,16 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
     List<int> users,
     _TurnLog log,
   ) async {
+    // self-buffs lasting 3+ turns on this turn's NP users go first (still active on later waves)
+    for (final skill in availableSkills(battle)) {
+      if (!skill.longPersonalBuff || skill.alwaysUse || skill.chargesNp) continue;
+      if (skill.needsAllyTarget) {
+        await _useSkill(battle, log, skill, users.first);
+      } else if (skill.slot != null && users.contains(skill.slot)) {
+        await _useSkill(battle, log, skill, null);
+      }
+    }
+
     // 3. attack with what we have
     var result = await _attack(battle, plans, csUsed, users, log);
     if (result.outcome != _Outcome.notCleared) return result.outcome;
@@ -513,8 +592,18 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
 
   /// NP charge skills and up to [commandSpellsLeft] Command Spells, with what each gives every NP user,
   /// measured one source at a time from the current state.
-  Future<List<_ChargeSource>> _chargeSources(BattleData battle, List<int> users, int commandSpellsLeft) async {
-    int npOf(int slot) => battle.onFieldAllyServants.getOrNull(slot)?.np ?? 0;
+  /// [nextTurn] (pre-charge): NP regen counts as one tick of charge, and skills that add NP regen are sources too.
+  Future<List<_ChargeSource>> _chargeSources(
+    BattleData battle,
+    List<int> users,
+    int commandSpellsLeft, {
+    bool nextTurn = false,
+  }) async {
+    int npOf(int slot) {
+      final svt = battle.onFieldAllyServants.getOrNull(slot);
+      if (svt == null) return 0;
+      return svt.np + (nextTurn ? npRegen(svt) : 0);
+    }
     Future<List<int>> measure(Future<void> Function() action) async {
       final before = [for (final slot in users) npOf(slot)];
       final depth = battle.snapshots.length;
@@ -531,7 +620,7 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
 
     final sources = <_ChargeSource>[];
     for (final skill in availableSkills(battle)) {
-      if (!skill.chargesNp) continue;
+      if (!skill.chargesNp && !(nextTurn && skill.addsNpRegen)) continue;
       final options = <_ChargeOption>[];
       for (final target in skill.needsAllyTarget ? users : <int?>[null]) {
         final gains = await measure(() => _activate(battle, skill, target));
@@ -651,6 +740,15 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
       await Future.delayed(Duration.zero); // keep the UI responsive
     }
     final cleared = played && (battle.isBattleWin || battle.waveCount > wave);
+    if (trace != null) {
+      final hp = Maths.sum(battle.nonnullEnemies.map((e) => max(0, e.hp)));
+      final result = !played
+          ? 'NOT PLAYED'
+          : cleared
+          ? 'CLEARED'
+          : 'not cleared, enemy HP $hp';
+      trace!('W$wave ${'  ' * plans.length}${[...log.steps, cardsStep].join('; ')} => $result');
+    }
     if (!cleared) {
       final hp = Maths.sum(battle.nonnullEnemies.map((e) => max(0, e.hp)));
       _restore(battle, depth);
@@ -672,6 +770,15 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
     plans.removeLast();
     _restore(battle, depth);
     return _AttackResult(_cancelled ? _Outcome.stopped : _Outcome.clearedLaterFailed);
+  }
+
+  /// NP the servant's regen buffs give at the end of the turn.
+  static int npRegen(BattleServantData svt) {
+    int total = 0;
+    for (final buff in svt.battleBuff.validBuffs) {
+      if (buff.buff.type == BuffType.regainNp) total += buff.vals.Value ?? 0;
+    }
+    return total;
   }
 
   static String _cardLabel(CombatAction action) {
@@ -808,7 +915,9 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
         needsAllyTarget: _needsAllyTarget(skill),
         anyAllyTarget: _anyAllyTarget(skill),
         alwaysUse: use == TgSkillUse.always,
-        chargesNp: skill.functions.any(_isNpCharge),
+        chargesNp: _playerFuncs(skill).any(_isNpCharge),
+        addsNpRegen: _playerFuncs(skill).any((f) => f.buffs.any((b) => b.type == BuffType.regainNp)),
+        longPersonalBuff: _longPersonalBuff(skill),
         oneTurnOnly: _oneTurnOnly(skill),
         name: name,
       );
@@ -837,8 +946,53 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
     return skills;
   }
 
+  static bool _isTurnTrigger(BuffType type) =>
+      type == BuffType.selfturnstartFunction || type == BuffType.selfturnendFunction;
+
+  /// Turn start/end skills missing from the local game data, fetched by [prefetchTriggeredSkills].
+  static final Map<int, BaseSkill> _fetchedSkills = {};
+
+  /// Fetches the turn start/end skills the team's skills trigger that aren't in the local game data, so
+  /// [skillUse] can tell whether they charge NP.
+  static Future<void> prefetchTriggeredSkills(BattleData battle) async {
+    final skills = <BaseSkill>[
+      for (final svt in battle.nonnullPlayers)
+        for (final info in svt.skillInfoList)
+          if (info.skill != null) info.skill!,
+      for (final info in battle.masterSkillInfo)
+        if (info.skill != null) info.skill!,
+    ];
+    for (final skill in skills) {
+      for (final func in _playerFuncs(skill)) {
+        if (!func.buffs.any((b) => _isTurnTrigger(b.type))) continue;
+        final id = func.svals.firstOrNull?.Value;
+        if (id == null || db.gameData.baseSkills.containsKey(id) || _fetchedSkills.containsKey(id)) continue;
+        try {
+          final fetched = await AtlasApi.skill(id);
+          if (fetched != null) _fetchedSkills[id] = fetched;
+        } catch (e) {
+          // unknown: treated as not charging NP
+        }
+      }
+    }
+  }
+
+  /// NP regen, or a turn start/end trigger whose skill charges NP.
+  static bool _givesNpOverTime(NiceFunction func) {
+    return func.buffs.any((buff) {
+      if (buff.type == BuffType.regainNp) return true;
+      if (!_isTurnTrigger(buff.type)) return false;
+      final id = func.svals.firstOrNull?.Value;
+      final triggered = db.gameData.baseSkills[id] ?? _fetchedSkills[id];
+      return triggered != null && _playerFuncs(triggered).any(_isNpCharge);
+    });
+  }
+
+  /// The functions that apply when a player uses the skill (some only apply when an enemy uses it).
+  static List<NiceFunction> _playerFuncs(BaseSkill skill) => skill.functions.where((f) => !f.isEnemyOnlyFunc).toList();
+
   static bool _needsAllyTarget(BaseSkill skill) {
-    return skill.functions.any(_isSingleAllyFunc);
+    return _playerFuncs(skill).any(_isSingleAllyFunc);
   }
 
   static bool _isSingleAllyFunc(NiceFunction func) =>
@@ -849,16 +1003,35 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
     return name.startsWith('gainNp') || name == 'gainMultiplyNp';
   }
 
+  /// Buffs on its user or one ally, every ally buff lasting 3+ turns (or until used up), no NP charge.
+  /// Effects on enemies don't matter.
+  static bool _longPersonalBuff(BaseSkill skill) {
+    final funcs = _playerFuncs(skill);
+    if (funcs.any(_isNpCharge)) return false;
+    final allyBuffs = [
+      for (final func in funcs)
+        if (func.buffs.isNotEmpty && !func.funcTargetType.isEnemy && func.funcTargetTeam != FuncApplyTarget.enemy) func,
+    ];
+    final personal = allyBuffs.any(
+      (f) => f.funcTargetType == FuncTargetType.self || f.funcTargetType.needNormalOneTarget,
+    );
+    return personal &&
+        allyBuffs.every((f) {
+          final turn = f.svals.firstOrNull?.Turn ?? 0;
+          return turn >= 3 || turn == -1;
+        });
+  }
+
   /// Every function with buffs gives buffs lasting exactly 1 turn.
   static bool _oneTurnOnly(BaseSkill skill) {
-    final buffFuncs = skill.functions.where((f) => f.buffs.isNotEmpty).toList();
+    final buffFuncs = _playerFuncs(skill).where((f) => f.buffs.isNotEmpty).toList();
     return buffFuncs.isNotEmpty && buffFuncs.every((f) => f.svals.firstOrNull?.Turn == 1);
   }
 
   /// A single-ally skill may target anyone if it charges NP or gives something other than 1-turn buffs;
   /// a skill whose single-ally effects are all 1-turn buffs only goes to the attacker.
   static bool _anyAllyTarget(BaseSkill skill) {
-    final funcs = skill.functions.where(_isSingleAllyFunc).toList();
+    final funcs = _playerFuncs(skill).where(_isSingleAllyFunc).toList();
     if (funcs.isEmpty) return false;
     if (funcs.any(_isNpCharge)) return true;
     final oneTurnBuffsOnly = funcs.every((func) => func.buffs.isNotEmpty && func.svals.firstOrNull?.Turn == 1);
@@ -976,15 +1149,17 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
 
   /// How the solver treats a skill:
   /// - never: nothing in it changes damage dealt, charges NP or reduces cooldowns (stars, healing, defense...)
-  /// - always: buffs on allies only, all lasting 3+ turns, no single target, no NP charge: used at the start
-  ///   of every wave when ready
+  /// - always: buffs on allies only, all lasting 3+ turns, no single target, no NP charge; or NP over time
+  ///   (regen, NP at turn start/end) without an immediate charge: used at the start of every wave when ready
   /// - choose: NP charge (step 2) or a buff tried one at a time (steps 4 and 5)
   static TgSkillUse skillUse(BaseSkill skill) {
-    final funcs = skill.functions;
+    final funcs = _playerFuncs(skill);
     if (!funcs.any(_mattersForClear)) return TgSkillUse.never;
     if (funcs.any((f) => f.funcTargetType.needNormalOneTarget || f.funcTargetType == FuncTargetType.enemy)) {
       return TgSkillUse.choose;
     }
+    // NP over time (regen, NP at turn start/end) without an immediate charge: the earlier, the more NP
+    if (!funcs.any(_isNpCharge) && funcs.any(_givesNpOverTime)) return TgSkillUse.always;
     if (funcs.any(_chargesNp)) return TgSkillUse.choose;
     final buffFuncs = funcs.where((f) => f.buffs.isNotEmpty).toList();
     if (buffFuncs.isEmpty) return TgSkillUse.choose;
