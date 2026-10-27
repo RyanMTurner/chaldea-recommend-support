@@ -217,7 +217,8 @@ class _AttackResult {
 ///
 /// For each wave:
 ///  1. use every ready party buff lasting 3+ turns that doesn't charge NP
-///  2. charge the NP users to 100%: fewest Command Spells, then least NP above 100%, then fewest skills
+///  2. charge the NP users to 100%: fewest Command Spells, then least NP above 100%, then fewest skills. If a
+///     later wave can't be cleared, the next-cheapest way to charge is tried before other NP users
 ///  3. attack: NP A + worst card + second-worst card
 ///  4. if the wave survives, add the other buffs lasting more than 1 turn one at a time and attack again after
 ///     each (a single-ally buff goes to the NP user that leaves the least enemy HP)
@@ -412,8 +413,11 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
     return false;
   }
 
-  /// Steps 2-5 with [users] firing their NPs in this order. With [withCommandSpells], only when charging needs
-  /// at least one Command Spell (the ways without were already tried).
+  /// Steps 2-5 with [users] firing their NPs in this order. With [withCommandSpells], only the ways of charging
+  /// that use at least one Command Spell (the ways without were already tried).
+  ///
+  /// Every way to charge the NP users is tried, cheapest first: when a later wave can't be cleared, the next
+  /// way to charge may leave it the skills it needs.
   Future<_Outcome> _tryUsers(
     BattleData battle,
     List<TgTurnPlan> plans,
@@ -422,16 +426,50 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
     _TurnLog log,
     bool withCommandSpells,
   ) async {
-    // 2. charge the NP users
-    final charged = await _charge(
-      battle,
-      users,
-      withCommandSpells ? settings.maxCommandSpells - csUsed : 0,
-      log,
-      requireCommandSpell: withCommandSpells,
-    );
-    if (!charged) return _Outcome.notCleared;
+    // 2. ways to charge the NP users
+    final full = ConstData.constants.fullTdPoint;
+    final need = [for (final slot in users) max(0, full - (battle.onFieldAllyServants.getOrNull(slot)?.np ?? 0))];
+    final List<_ChargeSource> sources;
+    final List<List<int?>> choices;
+    if (need.every((n) => n == 0)) {
+      if (withCommandSpells) return _Outcome.notCleared;
+      sources = [];
+      choices = [[]];
+    } else {
+      sources = await _chargeSources(battle, users, withCommandSpells ? settings.maxCommandSpells - csUsed : 0);
+      choices = [
+        for (final choice in chargeChoices(
+          need,
+          [for (final source in sources) source.options.map((o) => o.gains).toList()],
+          [for (final source in sources) source.isCommandSpell],
+        ))
+          if (!withCommandSpells || choice.indexed.any((e) => e.$2 != null && sources[e.$1].isCommandSpell)) choice,
+      ];
+    }
 
+    final beforeCharge = battle.snapshots.length;
+    for (final choice in choices) {
+      battle.pushSnapshot();
+      final attempt = log.copy();
+      await _applyCharge(battle, sources, choice, attempt);
+      final outcome = users.every((slot) => battle.onFieldAllyServants.getOrNull(slot)?.canNP() == true)
+          ? await _attackWithBuffs(battle, plans, csUsed, users, attempt)
+          : _Outcome.notCleared;
+      if (outcome == _Outcome.solved) return outcome; // keep the final state
+      _restore(battle, beforeCharge);
+      if (outcome == _Outcome.stopped) return outcome;
+    }
+    return _Outcome.notCleared;
+  }
+
+  /// Steps 3-5: attack, then add buffs one at a time and attack again after each.
+  Future<_Outcome> _attackWithBuffs(
+    BattleData battle,
+    List<TgTurnPlan> plans,
+    int csUsed,
+    List<int> users,
+    _TurnLog log,
+  ) async {
     // 3. attack with what we have
     var result = await _attack(battle, plans, csUsed, users, log);
     if (result.outcome != _Outcome.notCleared) return result.outcome;
@@ -473,114 +511,91 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
     return _Outcome.notCleared;
   }
 
-  /// Step 2: charge every NP user to 100% with NP charge skills and Command Spells.
-  /// Picks the fewest Command Spells, then the least NP above 100%, then the fewest skills.
-  /// What each source gives is measured one source at a time from the current state.
-  /// [requireCommandSpell]: fails unless the cheapest way uses a Command Spell.
-  Future<bool> _charge(
-    BattleData battle,
-    List<int> users,
-    int commandSpellsLeft,
-    _TurnLog log, {
-    bool requireCommandSpell = false,
-  }) async {
-    final full = ConstData.constants.fullTdPoint;
+  /// NP charge skills and up to [commandSpellsLeft] Command Spells, with what each gives every NP user,
+  /// measured one source at a time from the current state.
+  Future<List<_ChargeSource>> _chargeSources(BattleData battle, List<int> users, int commandSpellsLeft) async {
     int npOf(int slot) => battle.onFieldAllyServants.getOrNull(slot)?.np ?? 0;
-    final need = [for (final slot in users) max(0, full - npOf(slot))];
-    if (requireCommandSpell && need.every((n) => n == 0)) return false;
+    Future<List<int>> measure(Future<void> Function() action) async {
+      final before = [for (final slot in users) npOf(slot)];
+      final depth = battle.snapshots.length;
+      battle.pushSnapshot();
+      try {
+        await action();
+        return [for (final (i, slot) in users.indexed) npOf(slot) - before[i]];
+      } catch (e) {
+        return List.filled(users.length, 0);
+      } finally {
+        _restore(battle, depth);
+      }
+    }
 
-    if (need.any((n) => n > 0)) {
-      Future<List<int>> measure(Future<void> Function() action) async {
-        final before = [for (final slot in users) npOf(slot)];
-        final depth = battle.snapshots.length;
-        battle.pushSnapshot();
-        try {
-          await action();
-          return [for (final (i, slot) in users.indexed) npOf(slot) - before[i]];
-        } catch (e) {
-          return List.filled(users.length, 0);
-        } finally {
-          _restore(battle, depth);
-        }
+    final sources = <_ChargeSource>[];
+    for (final skill in availableSkills(battle)) {
+      if (!skill.chargesNp) continue;
+      final options = <_ChargeOption>[];
+      for (final target in skill.needsAllyTarget ? users : <int?>[null]) {
+        final gains = await measure(() => _activate(battle, skill, target));
+        if (gains.any((g) => g > 0)) options.add(_ChargeOption(target, gains));
       }
-
-      final sources = <_ChargeSource>[];
-      for (final skill in availableSkills(battle)) {
-        if (!skill.chargesNp) continue;
-        final options = <_ChargeOption>[];
-        for (final target in skill.needsAllyTarget ? users : <int?>[null]) {
-          final gains = await measure(() => _activate(battle, skill, target));
-          if (gains.any((g) => g > 0)) options.add(_ChargeOption(target, gains));
-        }
-        if (options.isNotEmpty) sources.add(_ChargeSource(skill, options));
+      if (options.isNotEmpty) sources.add(_ChargeSource(skill, options));
+    }
+    final commandSpells = min(commandSpellsLeft, users.length);
+    if (commandSpells > 0) {
+      final options = <_ChargeOption>[];
+      for (final target in users) {
+        final gains = await measure(() => _activateCommandSpell(battle, target));
+        if (gains.any((g) => g > 0)) options.add(_ChargeOption(target, gains));
       }
-      final commandSpells = min(commandSpellsLeft, users.length);
-      if (commandSpells > 0) {
-        final options = <_ChargeOption>[];
-        for (final target in users) {
-          final gains = await measure(() => _activateCommandSpell(battle, target));
-          if (gains.any((g) => g > 0)) options.add(_ChargeOption(target, gains));
-        }
-        if (options.isNotEmpty) {
-          for (int i = 0; i < commandSpells; i++) {
-            sources.add(_ChargeSource(null, options));
-          }
-        }
-      }
-
-      final picked = pickCharges(
-        need,
-        [for (final source in sources) source.options.map((o) => o.gains).toList()],
-        [for (final source in sources) source.isCommandSpell],
-      );
-      if (picked == null) return false;
-      if (requireCommandSpell && !picked.indexed.any((e) => e.$2 != null && sources[e.$1].isCommandSpell)) {
-        return false;
-      }
-      for (final (index, option) in picked.indexed) {
-        if (option == null) continue;
-        final source = sources[index];
-        final target = source.options[option].target;
-        if (source.isCommandSpell) {
-          await _activateCommandSpell(battle, target!);
-          log.commandSpells.add(target);
-          log.steps.add('Command Spell → ${_nameOf(battle, target)}');
-        } else {
-          await _useSkill(battle, log, source.skill!, target);
+      if (options.isNotEmpty) {
+        for (int i = 0; i < commandSpells; i++) {
+          sources.add(_ChargeSource(null, options));
         }
       }
     }
-    return users.every((slot) => battle.onFieldAllyServants.getOrNull(slot)?.canNP() == true);
+    return sources;
   }
 
-  /// Chooses an option (or none) for each charge source so that every NP user gains at least [need].
-  /// [options] per source: the gain of each NP user for each option. Cost order: fewest Command Spells, then
-  /// least overflow, then fewest skills. Returns the option index per source (null = unused), or null if [need]
-  /// can't be met.
+  /// Uses the charge sources picked in [choice] (option index per source, null = unused).
+  Future<void> _applyCharge(BattleData battle, List<_ChargeSource> sources, List<int?> choice, _TurnLog log) async {
+    for (final (index, option) in choice.indexed) {
+      if (option == null) continue;
+      final source = sources[index];
+      final target = source.options[option].target;
+      if (source.isCommandSpell) {
+        await _activateCommandSpell(battle, target!);
+        log.commandSpells.add(target);
+        log.steps.add('Command Spell → ${_nameOf(battle, target)}');
+      } else {
+        await _useSkill(battle, log, source.skill!, target);
+      }
+    }
+  }
+
+  /// The cheapest way to charge, see [chargeChoices]; null if [need] can't be met.
   @visibleForTesting
-  static List<int?>? pickCharges(List<int> need, List<List<List<int>>> options, List<bool> isCommandSpell) {
-    List<int?>? best;
-    (int, int, int)? bestCost;
+  static List<int?>? pickCharges(List<int> need, List<List<List<int>>> options, List<bool> isCommandSpell) =>
+      chargeChoices(need, options, isCommandSpell).firstOrNull;
+
+  /// Every way to pick an option (or none) for each charge source so that every NP user gains at least [need],
+  /// cheapest first: fewest Command Spells, then least overflow, then fewest skills.
+  /// [options] per source: the gain of each NP user for each option. Each way is the option index per source
+  /// (null = unused). Sources after the need is met are left unused (they would only add waste).
+  @visibleForTesting
+  static List<List<int?>> chargeChoices(List<int> need, List<List<List<int>>> options, List<bool> isCommandSpell) {
+    final found = <((int, int, int), List<int?>)>[];
     final choice = List<int?>.filled(options.length, null);
-    bool better((int, int, int) a, (int, int, int) b) =>
-        a.$1 != b.$1 ? a.$1 < b.$1 : (a.$2 != b.$2 ? a.$2 < b.$2 : a.$3 < b.$3);
 
     void search(int index, List<int> gained, int commandSpells, int skills) {
-      if (bestCost != null && commandSpells > bestCost!.$1) return;
       final met = [for (final (i, n) in need.indexed) gained[i] >= n].every((e) => e);
-      if (met || index == options.length) {
-        if (!met) return;
+      if (met) {
         int waste = 0;
         for (final (i, n) in need.indexed) {
           waste += gained[i] - n;
         }
-        final cost = (commandSpells, waste, skills);
-        if (bestCost == null || better(cost, bestCost!)) {
-          bestCost = cost;
-          best = List.of(choice);
-        }
-        return; // more sources only add waste
+        found.add(((commandSpells, waste, skills), List.of(choice)));
+        return;
       }
+      if (index == options.length) return;
       search(index + 1, gained, commandSpells, skills);
       for (final (o, gains) in options[index].indexed) {
         choice[index] = o;
@@ -595,7 +610,16 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
     }
 
     search(0, List.filled(need.length, 0), 0, 0);
-    return best;
+    // stable sort: equal costs keep the search order
+    final indexed = found.indexed.toList()
+      ..sort((a, b) {
+        final (x, y) = (a.$2.$1, b.$2.$1);
+        if (x.$1 != y.$1) return x.$1 - y.$1;
+        if (x.$2 != y.$2) return x.$2 - y.$2;
+        if (x.$3 != y.$3) return x.$3 - y.$3;
+        return a.$1 - b.$1;
+      });
+    return [for (final (_, (_, way)) in indexed) way];
   }
 
   /// Plays the turn: the NPs of [users] in order plus the weakest face cards. If the wave is cleared, goes on

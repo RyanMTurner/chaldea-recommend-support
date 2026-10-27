@@ -185,6 +185,17 @@ void main() async {
       expect(pick(10000, [gives(2000), cs]), [null, 0], reason: 'only the Command Spell gets there');
       expect(pick(10000, [gives(2000)]), isNull);
 
+      // every way, cheapest first: the solver falls back to the next one when a later wave fails
+      expect(
+        TeamGeneratorSolver.chargeChoices([5000], [gives(3000), gives(2000), gives(5000)], [false, false, false]),
+        [
+          [null, null, 0], // 50: no waste, 1 skill
+          [0, 0, null], // 30+20: no waste, 2 skills
+          [null, 0, 0], // 20+50: 20 waste
+          [0, null, 0], // 30+50: 30 waste
+        ],
+      );
+
       // single-ally skills: one option per NP user; two NP users needing 20 each
       final either = [
         [2000, 0],
