@@ -66,6 +66,10 @@ BattleSimSetting _$BattleSimSettingFromJson(Map json) => $checkedCreate('BattleS
     recordScreenshotRatio: $checkedConvert('recordScreenshotRatio', (v) => (v as num?)?.toInt() ?? 10),
     recordShowTwoColumn: $checkedConvert('recordShowTwoColumn', (v) => v as bool? ?? false),
     manualAllySkillTarget: $checkedConvert('manualAllySkillTarget', (v) => v as bool? ?? false),
+    teamGenerator: $checkedConvert(
+      'teamGenerator',
+      (v) => v == null ? null : TeamGeneratorSaveData.fromJson(Map<String, dynamic>.from(v as Map)),
+    ),
   );
   return val;
 });
@@ -83,6 +87,35 @@ Map<String, dynamic> _$BattleSimSettingToJson(BattleSimSetting instance) => <Str
   'recordScreenshotRatio': instance.recordScreenshotRatio,
   'recordShowTwoColumn': instance.recordShowTwoColumn,
   'manualAllySkillTarget': instance.manualAllySkillTarget,
+  'teamGenerator': instance.teamGenerator.toJson(),
+};
+
+TeamGeneratorSaveData _$TeamGeneratorSaveDataFromJson(Map json) =>
+    $checkedCreate('TeamGeneratorSaveData', json, ($checkedConvert) {
+      final val = TeamGeneratorSaveData(
+        maxTurns: $checkedConvert('maxTurns', (v) => (v as num?)?.toInt() ?? 3),
+        maxCommandSpells: $checkedConvert('maxCommandSpells', (v) => (v as num?)?.toInt() ?? 0),
+        timeLimitSeconds: $checkedConvert('timeLimitSeconds', (v) => (v as num?)?.toInt() ?? 60),
+        workers: $checkedConvert('workers', (v) => (v as num?)?.toInt()),
+        quest: $checkedConvert(
+          'quest',
+          (v) => v == null ? null : BattleQuestInfo.fromJson(Map<String, dynamic>.from(v as Map)),
+        ),
+        formation: $checkedConvert(
+          'formation',
+          (v) => v == null ? null : BattleTeamFormation.fromJson(Map<String, dynamic>.from(v as Map)),
+        ),
+      );
+      return val;
+    });
+
+Map<String, dynamic> _$TeamGeneratorSaveDataToJson(TeamGeneratorSaveData instance) => <String, dynamic>{
+  'maxTurns': instance.maxTurns,
+  'maxCommandSpells': instance.maxCommandSpells,
+  'timeLimitSeconds': instance.timeLimitSeconds,
+  'workers': instance.workers,
+  'quest': instance.quest?.toJson(),
+  'formation': instance.formation.toJson(),
 };
 
 Value? _$JsonConverterFromJson<Json, Value>(Object? json, Value? Function(Json json) fromJson) =>

@@ -28,6 +28,9 @@ class _TeamGeneratorState {
   TeamGeneratorResult? result;
   QuestPhase? resultQuest;
   BattleTeamSetup? resultFormation;
+
+  /// the saved setup has been loaded (once per app run)
+  bool restored = false;
 }
 
 class TeamGeneratorPage extends StatefulWidget {
@@ -48,9 +51,76 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
   bool _startingWorkers = false;
 
   bool get solving => _solver != null;
+  bool _restoring = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!state.restored) {
+      state.restored = true;
+      _restore();
+    }
+  }
+
+  /// Load the setup saved by [_save]: settings, quest, servants, CEs and mystic code.
+  Future<void> _restore() async {
+    final saved = db.settings.battleSim.teamGenerator;
+    setState(() => _restoring = true);
+    try {
+      state.settings
+        ..maxTurns = saved.maxTurns
+        ..maxCommandSpells = saved.maxCommandSpells
+        ..timeLimitSeconds = saved.timeLimitSeconds;
+      if (saved.workers != null) state.settings.workers = saved.workers!;
+
+      final svts = <PlayerSvtData>[];
+      for (final svt in saved.formation.svts) {
+        svts.add(await PlayerSvtData.fromStoredData(svt));
+      }
+      state.formation.updateSvts(svts);
+      state.formation.mysticCodeData.loadStoredData(saved.formation.mysticCode);
+
+      final questInfo = saved.quest;
+      if (questInfo != null) {
+        final local = db.gameData.getQuestPhase(questInfo.id, questInfo.phase);
+        state.quest = local != null && (questInfo.enemyHash == null || local.enemyHash == questInfo.enemyHash)
+            ? local
+            : await AtlasApi.questPhase(
+                questInfo.id,
+                questInfo.phase,
+                hash: questInfo.enemyHash,
+                region: questInfo.region ?? Region.jp,
+              );
+      }
+    } catch (e, s) {
+      logger.e('restore team generator setup failed', e, s);
+    } finally {
+      _restoring = false;
+      if (mounted) setState(() {});
+    }
+  }
+
+  void _save() {
+    if (_restoring) return;
+    final quest = state.quest;
+    db.settings.battleSim.teamGenerator = TeamGeneratorSaveData(
+      maxTurns: state.settings.maxTurns,
+      maxCommandSpells: state.settings.maxCommandSpells,
+      timeLimitSeconds: state.settings.timeLimitSeconds,
+      workers: state.settings.workers,
+      quest: quest == null ? null : BattleQuestInfo.quest(quest),
+      // fromList: an empty 3rd slot stays empty instead of becoming a support placeholder
+      formation: BattleTeamFormation.fromList(
+        svts: state.formation.svts.map((e) => e.isEmpty ? null : e.toStoredData()).toList(),
+        mysticCode: state.formation.mysticCodeData.toStoredData(),
+      ),
+    );
+    db.notifySettings();
+  }
 
   @override
   void dispose() {
+    _save(); // also catches edits made directly on the servants (e.g. in the servant settings page)
     _solver?.cancel();
     // each worker holds a copy of the game data, free it when leaving the page
     unawaited(TeamGeneratorWorkerPool.disposeCurrent());
@@ -62,6 +132,7 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
       change();
       state.result = null;
     });
+    _save();
   }
 
   void _editNumber({
@@ -178,6 +249,7 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
       body: ListView(
         padding: const EdgeInsets.only(bottom: 24),
         children: [
+          if (_restoring) const LinearProgressIndicator(),
           TileGroup(header: S.current.quest, children: [_questPicker()]),
           TileGroup(
             header: S.current.team,

@@ -126,6 +126,8 @@ class BattleSimSetting {
 
   bool manualAllySkillTarget;
 
+  TeamGeneratorSaveData teamGenerator;
+
   BattleSimSetting({
     this.playerRegion,
     this.playerDataSource = PreferPlayerSvtDataSource.current,
@@ -139,7 +141,9 @@ class BattleSimSetting {
     this.recordScreenshotRatio = 10,
     this.recordShowTwoColumn = false,
     this.manualAllySkillTarget = false,
+    TeamGeneratorSaveData? teamGenerator,
   }) : defaultLvs = defaultLvs ?? PlayerSvtDefaultData(),
+       teamGenerator = teamGenerator ?? TeamGeneratorSaveData(),
        curTeam = curTeam ?? BattleShareData(quest: null, formation: BattleTeamFormation()),
        svtFilterData = svtFilterData ?? SvtFilterData(useGrid: true),
        craftFilterData = craftFilterData ?? CraftFilterData(useGrid: true),
@@ -159,6 +163,32 @@ class BattleSimSetting {
   factory BattleSimSetting.fromJson(Map<String, dynamic> json) => _$BattleSimSettingFromJson(json);
 
   Map<String, dynamic> toJson() => _$BattleSimSettingToJson(this);
+}
+
+/// Team Generator page setup, restored the next time the page is opened.
+@JsonSerializable()
+class TeamGeneratorSaveData {
+  int maxTurns;
+  int maxCommandSpells;
+  int timeLimitSeconds;
+
+  /// null: the default for this device
+  int? workers;
+  BattleQuestInfo? quest;
+  BattleTeamFormation formation;
+
+  TeamGeneratorSaveData({
+    this.maxTurns = 3,
+    this.maxCommandSpells = 0,
+    this.timeLimitSeconds = 60,
+    this.workers,
+    this.quest,
+    BattleTeamFormation? formation,
+  }) : formation = formation ?? BattleTeamFormation();
+
+  factory TeamGeneratorSaveData.fromJson(Map<String, dynamic> json) => _$TeamGeneratorSaveDataFromJson(json);
+
+  Map<String, dynamic> toJson() => _$TeamGeneratorSaveDataToJson(this);
 }
 
 @JsonSerializable(includeIfNull: false)
