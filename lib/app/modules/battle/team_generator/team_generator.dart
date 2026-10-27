@@ -68,7 +68,6 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
     setState(() => _restoring = true);
     try {
       state.settings
-        ..maxTurns = saved.maxTurns
         ..maxCommandSpells = saved.maxCommandSpells
         ..timeLimitSeconds = saved.timeLimitSeconds;
       if (saved.workers != null) state.settings.workers = saved.workers!;
@@ -104,7 +103,6 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
     if (_restoring) return;
     final quest = state.quest;
     db.settings.battleSim.teamGenerator = TeamGeneratorSaveData(
-      maxTurns: state.settings.maxTurns,
       maxCommandSpells: state.settings.maxCommandSpells,
       timeLimitSeconds: state.settings.timeLimitSeconds,
       workers: state.settings.workers,
@@ -267,7 +265,6 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
           TileGroup(
             header: S.current.settings_tab_name,
             children: [
-              _numberTile('Maximum Turns', state.settings.maxTurns, 1, (v) => state.settings.maxTurns = v),
               _numberTile(
                 'Maximum Command Spells',
                 state.settings.maxCommandSpells,

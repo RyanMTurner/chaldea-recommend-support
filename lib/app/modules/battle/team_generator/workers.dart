@@ -61,7 +61,6 @@ class _SolveRequest {
   final int id;
   final QuestPhase quest;
   final BattleTeamFormation formation;
-  final int maxTurns;
   final int maxCommandSpells;
   final int maxHeldSkills;
 
@@ -69,7 +68,6 @@ class _SolveRequest {
     required this.id,
     required this.quest,
     required this.formation,
-    required this.maxTurns,
     required this.maxCommandSpells,
     required this.maxHeldSkills,
   });
@@ -169,7 +167,6 @@ Future<TeamGeneratorSolver?> _startSolve(_WorkerBoot boot, _SolveRequest request
       quest: request.quest,
       formation: team,
       settings: TeamGeneratorSettings(
-        maxTurns: request.maxTurns,
         maxCommandSpells: request.maxCommandSpells,
         maxHeldSkills: request.maxHeldSkills,
         timeLimitSeconds: 1 << 30, // the page owns the clock
@@ -418,7 +415,6 @@ class ParallelTeamGeneratorRun implements TeamGeneratorRun {
       id: _id,
       quest: quest,
       formation: formation.toFormationData(),
-      maxTurns: settings.maxTurns,
       maxCommandSpells: settings.maxCommandSpells,
       maxHeldSkills: settings.maxHeldSkills,
     );

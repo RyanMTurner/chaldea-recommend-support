@@ -168,7 +168,6 @@ class BattleSimSetting {
 /// Team Generator page setup, restored the next time the page is opened.
 @JsonSerializable()
 class TeamGeneratorSaveData {
-  int maxTurns;
   int maxCommandSpells;
   int timeLimitSeconds;
 
@@ -178,7 +177,6 @@ class TeamGeneratorSaveData {
   BattleTeamFormation formation;
 
   TeamGeneratorSaveData({
-    this.maxTurns = 3,
     this.maxCommandSpells = 0,
     this.timeLimitSeconds = 60,
     this.workers,

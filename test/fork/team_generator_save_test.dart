@@ -14,7 +14,6 @@ void main() async {
   test('team generator setup survives a settings JSON round trip', () {
     final settings = BattleSimSetting()
       ..teamGenerator = TeamGeneratorSaveData(
-        maxTurns: 4,
         maxCommandSpells: 2,
         timeLimitSeconds: 120,
         workers: 3,
@@ -30,8 +29,6 @@ void main() async {
         ),
       );
     final restored = BattleSimSetting.fromJson(settings.toJson()).teamGenerator;
-
-    expect(restored.maxTurns, 4);
     expect(restored.maxCommandSpells, 2);
     expect(restored.timeLimitSeconds, 120);
     expect(restored.workers, 3);
@@ -50,7 +47,6 @@ void main() async {
   test('old settings without a team generator setup load the defaults', () {
     final json = BattleSimSetting().toJson()..remove('teamGenerator');
     final restored = BattleSimSetting.fromJson(json).teamGenerator;
-    expect(restored.maxTurns, 3);
     expect(restored.workers, isNull);
     expect(restored.quest, isNull);
   });

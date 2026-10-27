@@ -93,7 +93,6 @@ Map<String, dynamic> _$BattleSimSettingToJson(BattleSimSetting instance) => <Str
 TeamGeneratorSaveData _$TeamGeneratorSaveDataFromJson(Map json) =>
     $checkedCreate('TeamGeneratorSaveData', json, ($checkedConvert) {
       final val = TeamGeneratorSaveData(
-        maxTurns: $checkedConvert('maxTurns', (v) => (v as num?)?.toInt() ?? 3),
         maxCommandSpells: $checkedConvert('maxCommandSpells', (v) => (v as num?)?.toInt() ?? 0),
         timeLimitSeconds: $checkedConvert('timeLimitSeconds', (v) => (v as num?)?.toInt() ?? 60),
         workers: $checkedConvert('workers', (v) => (v as num?)?.toInt()),
@@ -110,7 +109,6 @@ TeamGeneratorSaveData _$TeamGeneratorSaveDataFromJson(Map json) =>
     });
 
 Map<String, dynamic> _$TeamGeneratorSaveDataToJson(TeamGeneratorSaveData instance) => <String, dynamic>{
-  'maxTurns': instance.maxTurns,
   'maxCommandSpells': instance.maxCommandSpells,
   'timeLimitSeconds': instance.timeLimitSeconds,
   'workers': instance.workers,

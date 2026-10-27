@@ -28,7 +28,7 @@ void main() async {
     final result = await TeamGeneratorSolver(
       quest: quest!,
       formation: team,
-      settings: TeamGeneratorSettings(maxTurns: 3, maxCommandSpells: 0, timeLimitSeconds: 120, workers: 0),
+      settings: TeamGeneratorSettings(maxCommandSpells: 0, timeLimitSeconds: 120, workers: 0),
     ).solve();
     out.add('after solve (${result.success}): ${stamp()}');
     await Future.delayed(const Duration(seconds: 12)); // debounced saves fire after 10s

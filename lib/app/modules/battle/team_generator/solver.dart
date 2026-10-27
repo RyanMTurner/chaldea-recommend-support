@@ -13,8 +13,6 @@ import '../simulation/fga_export.dart';
 
 /// User settings for the Team Generator solver.
 class TeamGeneratorSettings {
-  /// The solver clears one wave per turn, so this only has to be at least the number of waves.
-  int maxTurns;
   int maxCommandSpells;
   int timeLimitSeconds;
 
@@ -25,7 +23,6 @@ class TeamGeneratorSettings {
   int workers;
 
   TeamGeneratorSettings({
-    this.maxTurns = 3,
     this.maxCommandSpells = 0,
     this.timeLimitSeconds = 60,
     this.maxHeldSkills = 2,
@@ -36,7 +33,6 @@ class TeamGeneratorSettings {
   static int get defaultWorkers => kIsWeb ? 0 : max(1, min(4, Platform.numberOfProcessors - 1));
 
   TeamGeneratorSettings copy() => TeamGeneratorSettings(
-    maxTurns: maxTurns,
     maxCommandSpells: maxCommandSpells,
     timeLimitSeconds: timeLimitSeconds,
     maxHeldSkills: maxHeldSkills,
@@ -342,12 +338,6 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
     if (team.svts.take(3).every((svt) => svt.svt == null)) {
       return _result(false, 'No servant in the front line.');
     }
-    if (_totalWaves > settings.maxTurns) {
-      return _result(
-        false,
-        'The quest has $_totalWaves waves and each wave takes a turn: Maximum Turns must be at least $_totalWaves.',
-      );
-    }
     final battle = BattleData();
     battle.options
       ..random = ConstData.constants.attackRateRandomMin
@@ -399,7 +389,7 @@ class TeamGeneratorSolver implements TeamGeneratorRun {
   /// the battle is then left in its final state.
   Future<bool> _solveWave(BattleData battle, List<TgTurnPlan> plans, int csUsed) async {
     if (battle.isBattleWin) return true;
-    if (plans.length >= settings.maxTurns || battle.nonnullPlayers.isEmpty) return false;
+    if (battle.nonnullPlayers.isEmpty) return false;
     if (!await _continueAfterTimeLimit()) return false;
 
     final start = battle.snapshots.length;

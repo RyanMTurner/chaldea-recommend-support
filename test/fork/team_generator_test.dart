@@ -54,20 +54,11 @@ void main() async {
     expect(result.success, isFalse);
   });
 
-  test('fewer turns than waves cannot clear (one turn per wave)', () async {
-    final result = await TeamGeneratorSolver(
-      quest: quest,
-      formation: altriaTeam(),
-      settings: TeamGeneratorSettings(maxTurns: waves - 1, maxCommandSpells: 3),
-    ).solve();
-    expect(result.success, isFalse);
-  });
-
   test('no NP gauge and no Command Spells: no plan', () async {
     final result = await TeamGeneratorSolver(
       quest: quest,
       formation: altriaTeam(),
-      settings: TeamGeneratorSettings(maxTurns: waves, maxCommandSpells: 0, timeLimitSeconds: 30),
+      settings: TeamGeneratorSettings(maxCommandSpells: 0, timeLimitSeconds: 30),
     ).solve();
     expect(result.success, isFalse);
   });
@@ -76,7 +67,7 @@ void main() async {
     final result = await TeamGeneratorSolver(
       quest: quest,
       formation: altriaTeam(),
-      settings: TeamGeneratorSettings(maxTurns: waves, maxCommandSpells: 3, timeLimitSeconds: 60),
+      settings: TeamGeneratorSettings(maxCommandSpells: 3, timeLimitSeconds: 60),
     ).solve();
     expect(result.success, isTrue, reason: 'quest ${quest.id}: ${result.message}');
     expect(result.turns.length, waves, reason: 'one turn per wave');
@@ -99,7 +90,7 @@ void main() async {
     final result = await TeamGeneratorSolver(
       quest: quest,
       formation: altriaTeam(),
-      settings: TeamGeneratorSettings(maxTurns: waves, maxCommandSpells: 1, timeLimitSeconds: 30),
+      settings: TeamGeneratorSettings(maxCommandSpells: 1, timeLimitSeconds: 30),
     ).solve();
     if (result.success) expect(result.commandSpellsUsed, lessThanOrEqualTo(1));
   });
@@ -219,7 +210,7 @@ void main() async {
       solver = TeamGeneratorSolver(
         quest: quest,
         formation: altriaTeam(),
-        settings: TeamGeneratorSettings(maxTurns: waves, maxCommandSpells: 3, timeLimitSeconds: 0),
+        settings: TeamGeneratorSettings(maxCommandSpells: 3, timeLimitSeconds: 0),
         onPaused: (simulations, _) {
           pauses++;
           simulationsAtPause = simulations;
@@ -240,7 +231,7 @@ void main() async {
       solver = TeamGeneratorSolver(
         quest: quest,
         formation: altriaTeam(),
-        settings: TeamGeneratorSettings(maxTurns: waves, maxCommandSpells: 3, timeLimitSeconds: 0),
+        settings: TeamGeneratorSettings(maxCommandSpells: 3, timeLimitSeconds: 0),
         onPaused: (_, _) => Future.microtask(solver.cancel),
       );
       final result = await solver.solve();
@@ -251,7 +242,7 @@ void main() async {
 
   group('Parallel', () {
     TeamGeneratorSettings csSettings({int workers = 0}) =>
-        TeamGeneratorSettings(maxTurns: waves, maxCommandSpells: 3, timeLimitSeconds: 120, workers: workers);
+        TeamGeneratorSettings(maxCommandSpells: 3, timeLimitSeconds: 120, workers: workers);
 
     test('first-turn options are split between partitions; together they find the plan', () async {
       final results = [
@@ -310,7 +301,7 @@ void main() async {
         final result = await ParallelTeamGeneratorRun(
           quest: quest,
           formation: altriaTeam(),
-          settings: TeamGeneratorSettings(maxTurns: waves, maxCommandSpells: 0, timeLimitSeconds: 120, workers: 2),
+          settings: TeamGeneratorSettings(maxCommandSpells: 0, timeLimitSeconds: 120, workers: 2),
         ).solve();
         expect(result.success, isFalse);
         expect(result.message, TeamGeneratorSolver.noPlanMessage);
