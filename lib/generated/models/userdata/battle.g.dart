@@ -96,6 +96,8 @@ TeamGeneratorSaveData _$TeamGeneratorSaveDataFromJson(Map json) =>
         maxCommandSpells: $checkedConvert('maxCommandSpells', (v) => (v as num?)?.toInt() ?? 0),
         timeLimitSeconds: $checkedConvert('timeLimitSeconds', (v) => (v as num?)?.toInt() ?? 60),
         workers: $checkedConvert('workers', (v) => (v as num?)?.toInt()),
+        maxBond: $checkedConvert('maxBond', (v) => (v as num?)?.toInt() ?? 0),
+        supportIgnoresBondCap: $checkedConvert('supportIgnoresBondCap', (v) => v as bool? ?? false),
         quest: $checkedConvert(
           'quest',
           (v) => v == null ? null : BattleQuestInfo.fromJson(Map<String, dynamic>.from(v as Map)),
@@ -112,6 +114,8 @@ Map<String, dynamic> _$TeamGeneratorSaveDataToJson(TeamGeneratorSaveData instanc
   'maxCommandSpells': instance.maxCommandSpells,
   'timeLimitSeconds': instance.timeLimitSeconds,
   'workers': instance.workers,
+  'maxBond': instance.maxBond,
+  'supportIgnoresBondCap': instance.supportIgnoresBondCap,
   'quest': instance.quest?.toJson(),
   'formation': instance.formation.toJson(),
 };

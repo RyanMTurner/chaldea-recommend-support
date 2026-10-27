@@ -22,11 +22,19 @@ class TeamGeneratorSettings {
   /// Background worker isolates; 0 = search on the UI thread.
   int workers;
 
+  /// Recommended teams only: servants below this bond (0 = any), like Team Bond's "Bond ≤".
+  int maxBond;
+
+  /// Recommended teams only: the support may be a servant at the bond cap (not used yet).
+  bool supportIgnoresBondCap;
+
   TeamGeneratorSettings({
     this.maxCommandSpells = 0,
     this.timeLimitSeconds = 60,
     this.maxHeldSkills = 2,
     int? workers,
+    this.maxBond = 0,
+    this.supportIgnoresBondCap = false,
   }) : workers = workers ?? defaultWorkers;
 
   /// CPU cores - 1, at least 1 and at most 4 (each worker holds its own copy of the game data). 0 on web.
@@ -37,6 +45,8 @@ class TeamGeneratorSettings {
     timeLimitSeconds: timeLimitSeconds,
     maxHeldSkills: maxHeldSkills,
     workers: workers,
+    maxBond: maxBond,
+    supportIgnoresBondCap: supportIgnoresBondCap,
   );
 }
 

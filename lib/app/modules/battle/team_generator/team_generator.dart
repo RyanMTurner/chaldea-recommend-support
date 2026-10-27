@@ -72,6 +72,9 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
         ..maxCommandSpells = saved.maxCommandSpells
         ..timeLimitSeconds = saved.timeLimitSeconds;
       if (saved.workers != null) state.settings.workers = saved.workers!;
+      state.settings
+        ..maxBond = saved.maxBond
+        ..supportIgnoresBondCap = saved.supportIgnoresBondCap;
 
       final svts = <PlayerSvtData>[];
       for (final svt in saved.formation.svts) {
@@ -107,6 +110,8 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
       maxCommandSpells: state.settings.maxCommandSpells,
       timeLimitSeconds: state.settings.timeLimitSeconds,
       workers: state.settings.workers,
+      maxBond: state.settings.maxBond,
+      supportIgnoresBondCap: state.settings.supportIgnoresBondCap,
       quest: quest == null ? null : BattleQuestInfo.quest(quest),
       // fromList: an empty 3rd slot stays empty instead of becoming a support placeholder
       formation: BattleTeamFormation.fromList(
@@ -139,19 +144,27 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
     required int initial,
     required int min,
     required void Function(int) update,
+    String? hintText,
   }) {
     InputCancelOkDialog.number(
       title: title,
       initValue: initial,
       validate: (v) => v >= min,
       onSubmit: (v) => _changed(() => update(v)),
+      hintText: hintText,
     ).showDialog(context);
   }
 
   /// Lists recommended teams on the right half of the screen (a full page on narrow screens).
   void _recommendTeams() {
     router.pushPage(
-      TeamRecommendPage(teams: TeamRecommender.recommend(), onSelect: _selectTeam),
+      TeamRecommendPage(
+        teams: TeamRecommender.recommend(
+          maxBond: state.settings.maxBond,
+          supportIgnoresBondCap: state.settings.supportIgnoresBondCap,
+        ),
+        onSelect: _selectTeam,
+      ),
       detail: true,
       popDetail: true,
     );
@@ -315,6 +328,29 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
                   subtitle: '0 = main thread. Each worker keeps its own copy of the game data in memory.',
                   prefix: '',
                 ),
+              // recommended teams, same as Team Bond's setting
+              ListTile(
+                dense: true,
+                title: Text(S.current.bond),
+                trailing: TextButton(
+                  onPressed: () => _editNumber(
+                    title: '${S.current.bond}≤',
+                    initial: state.settings.maxBond,
+                    min: 0,
+                    update: (v) => state.settings.maxBond = v,
+                    hintText: '0 = ${S.current.general_any}',
+                  ),
+                  child: Text(
+                    state.settings.maxBond <= 0 ? S.current.general_any : '≤${state.settings.maxBond}',
+                  ),
+                ),
+              ),
+              CheckboxListTile(
+                dense: true,
+                title: const Text('Support Ignores Bond Cap'),
+                value: state.settings.supportIgnoresBondCap,
+                onChanged: (v) => _changed(() => state.settings.supportIgnoresBondCap = v ?? false),
+              ),
             ],
           ),
           Padding(

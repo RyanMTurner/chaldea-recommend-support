@@ -173,6 +173,12 @@ class TeamGeneratorSaveData {
 
   /// null: the default for this device
   int? workers;
+
+  /// Recommended teams: servants below this bond only (0 = any)
+  int maxBond;
+
+  /// Recommended teams: the support may be a servant at the bond cap (not used yet)
+  bool supportIgnoresBondCap;
   BattleQuestInfo? quest;
   BattleTeamFormation formation;
 
@@ -180,6 +186,8 @@ class TeamGeneratorSaveData {
     this.maxCommandSpells = 0,
     this.timeLimitSeconds = 60,
     this.workers,
+    this.maxBond = 0,
+    this.supportIgnoresBondCap = false,
     this.quest,
     BattleTeamFormation? formation,
   }) : formation = formation ?? BattleTeamFormation();

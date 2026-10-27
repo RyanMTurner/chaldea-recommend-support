@@ -9,12 +9,19 @@ import 'package:chaldea/widgets/widgets.dart';
 ///
 /// Placeholder until the recommendation algorithm exists: the user's owned servants, newest first
 /// (highest collection number), 6 at a time.
+///
+/// [maxBond] works like Team Bond's "Bond ≤": when above 0, servants at that bond or higher are left out.
+/// [supportIgnoresBondCap] will let the support be a servant at the bond cap (not used yet).
 class TeamRecommender {
-  static List<List<Servant>> recommend() {
-    final owned = [
-      for (final svt in db.gameData.servantsNoDup.values)
-        if (svt.collectionNo > 0 && db.curUser.servants[svt.collectionNo]?.favorite == true) svt,
-    ];
+  static List<List<Servant>> recommend({int maxBond = 0, bool supportIgnoresBondCap = false}) {
+    final owned = <Servant>[];
+    for (final svt in db.gameData.servantsNoDup.values) {
+      if (svt.collectionNo <= 0) continue;
+      final status = db.curUser.servants[svt.collectionNo];
+      if (status == null || !status.favorite) continue;
+      if (maxBond > 0 && status.bond >= maxBond) continue;
+      owned.add(svt);
+    }
     owned.sort((a, b) => b.collectionNo - a.collectionNo);
     return [
       for (int start = 0; start < owned.length; start += 6) owned.sublist(start, (start + 6).clamp(0, owned.length)),
