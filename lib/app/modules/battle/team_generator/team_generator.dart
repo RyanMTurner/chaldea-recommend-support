@@ -173,8 +173,13 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
       quest: quest,
       mysticCode: state.formation.mysticCodeData.copy(),
       settings: state.settings.copy(),
-      // the manual team's CEs, front line first
-      ces: [for (final svt in state.formation.svts) svt.equip1],
+      // the manual team's CEs, front line first (the support keeps its own)
+      ces: [
+        for (final svt in state.formation.svts)
+          if (!svt.supportType.isSupport) svt.equip1,
+      ],
+      // a support set in the manual team is every team's support
+      support: state.formation.svts.firstWhereOrNull((svt) => svt.supportType.isSupport && svt.svt != null),
     );
     router.pushPage(TeamRecommendPage(run: run, onSelect: _selectTeam), detail: true, popDetail: true);
     unawaited(run.start());

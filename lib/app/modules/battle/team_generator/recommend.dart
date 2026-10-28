@@ -102,13 +102,19 @@ class TeamRecommender {
   /// Own pool members, plus every other servant as a support-only candidate. Owned servants at or above the
   /// bond cap are support candidates only with [supportIgnoresBondCap].
   /// [excluded] servants (svt ids) are never used, not even as the support.
+  /// With a [fixedSupport] (set in the manual team), it is the only support candidate.
   static List<TgCandidate> candidates({
     int maxBond = 0,
     bool supportIgnoresBondCap = false,
     Set<int> excluded = const {},
+    PlayerSvtData? fixedSupport,
   }) {
     final own = ownPool(maxBond: maxBond, excluded: excluded).toSet();
     final result = [for (final svt in own) TgCandidate(ownData(svt), supportOnly: false)];
+    if (fixedSupport != null && fixedSupport.svt != null) {
+      result.add(TgCandidate(fixedSupport.copy()..supportType = SupportSvtType.friend, supportOnly: true));
+      return result;
+    }
     for (final svt in db.gameData.servantsNoDup.values) {
       if (!svt.isUserSvt || own.contains(svt) || excluded.contains(svt.id)) continue;
       final owned = db.curUser.servants[svt.collectionNo]?.favorite == true;
@@ -140,13 +146,17 @@ class TeamRecommender {
   }
 
   /// Candidate front lines (3 members, at most one support-only) from attacker coverage [ratios]
-  /// (per candidate, per CE option, per wave: share of the wave's HP its NP removes; option 0 = no CE, option
-  /// i = CE i-1), best first. Each of the [ceCount] CEs goes to a different member: the assignment that covers
-  /// the waves best (CEs on attackers on a tie). Returns the members and the CE option of each member.
+  /// (per candidate, per CE option, per wave: share of the wave's HP its NP removes; option 0 = its own CE
+  /// (usually none), option i = CE i-1), best first. Each of the [ceCount] CEs goes to a different member: the
+  /// assignment that covers the waves best (CEs on attackers on a tie). Returns the members and the CE option of
+  /// each member.
+  ///
+  /// [requiredMember] (the support set in the manual team) is in every front line and keeps its own CE.
   static List<(List<int> members, List<int> ceOptions, double estimate)> frontLines(
     List<TgCandidate> candidates,
     List<List<List<double>>> ratios, {
     int ceCount = 0,
+    int? requiredMember,
     int limit = 48,
   }) {
     const attackerThreshold = 0.5; // alone it removes half the wave: supports should do the rest
@@ -167,26 +177,36 @@ class TeamRecommender {
     final topSupports = List.generate(candidates.length, (i) => i)
       ..sort((a, b) => supportScores[b].compareTo(supportScores[a]));
     final supports = topSupports.take(10).toList();
+    if (requiredMember != null) {
+      if (!supports.contains(requiredMember)) supports.add(requiredMember);
+      if (attackers.contains(requiredMember) && !topAttackers.contains(requiredMember)) {
+        topAttackers.add(requiredMember);
+      }
+    }
 
     bool valid(List<int> members) {
       if (members.toSet().length != members.length) return false;
       if (members.where((m) => candidates[m].supportOnly).length > 1) return false;
+      if (requiredMember != null && !members.contains(requiredMember)) return false;
       // the same servant twice only as an own copy + a support copy
-      final ids = members.map((m) => candidates[m].svt.id).toList();
-      return ids.toSet().length == ids.length;
+      final ownIds = [
+        for (final m in members)
+          if (!candidates[m].supportOnly) candidates[m].svt.id,
+      ];
+      return ownIds.toSet().length == ownIds.length;
     }
 
     // every way to give the CEs to different members (attackers first, so they win ties)
     List<List<int>> assignments(List<int> members, List<int> attackersInTeam) {
       final order = [
         for (int k = 0; k < members.length; k++)
-          if (attackersInTeam.contains(members[k])) k,
+          if (attackersInTeam.contains(members[k]) && members[k] != requiredMember) k,
         for (int k = 0; k < members.length; k++)
-          if (!attackersInTeam.contains(members[k])) k,
+          if (!attackersInTeam.contains(members[k]) && members[k] != requiredMember) k,
       ];
       final result = <List<int>>[];
       void place(int ce, List<int> current) {
-        if (ce >= min(ceCount, members.length)) {
+        if (ce >= min(ceCount, order.length)) {
           result.add(List.of(current));
           return;
         }
@@ -287,7 +307,8 @@ Future<Object?> _scoreTask(Object? payload, void Function(Object? progress) repo
   for (final (index, stored) in work.svts.indexed) {
     final svt = await PlayerSvtData.fromStoredData(stored);
     results.add([
-      for (final ce in [SvtEquipData(), ...ces]) await scoreAttacker(work.quest, svt.copy()..equip1 = ce.copy()),
+      // option 0: the candidate's own CE (none, except a support set in the manual team)
+      for (final ce in [svt.equip1, ...ces]) await scoreAttacker(work.quest, svt.copy()..equip1 = ce.copy()),
     ]);
     report(index + 1);
   }
@@ -407,6 +428,9 @@ class TeamRecommendRun extends ChangeNotifier {
   /// CEs to hand out to the front line (the manual team's, at most 3).
   final List<SvtEquipData> ces;
 
+  /// The support set in the manual team: every team uses it (with its own CE).
+  final PlayerSvtData? support;
+
   /// Seconds the solver gets per team.
   final int timeLimitPerTeam;
 
@@ -415,8 +439,10 @@ class TeamRecommendRun extends ChangeNotifier {
     required this.mysticCode,
     required this.settings,
     List<SvtEquipData> ces = const [],
+    PlayerSvtData? support,
     this.timeLimitPerTeam = 60,
-  }) : ces = ces.where((e) => e.ce != null).take(3).map((e) => e.copy()).toList();
+  }) : ces = ces.where((e) => e.ce != null).take(3).map((e) => e.copy()).toList(),
+       support = support?.svt == null ? null : support!.copy();
 
   String stage = '';
   int done = 0;
@@ -488,6 +514,7 @@ class TeamRecommendRun extends ChangeNotifier {
       maxBond: settings.maxBond,
       supportIgnoresBondCap: settings.supportIgnoresBondCap,
       excluded: settings.excludedSvts,
+      fixedSupport: support,
     );
     // 2. attacker scoring (only servants with a damage NP)
     final attackerIndexes = [
@@ -514,14 +541,20 @@ class TeamRecommendRun extends ChangeNotifier {
 
     // 3-4. candidate front lines
     _update('Building teams…');
-    final fronts = TeamRecommender.frontLines(candidates, ratios, ceCount: ces.length);
+    final fixed = support == null ? -1 : candidates.lastIndexWhere((c) => c.supportOnly);
+    final fronts = TeamRecommender.frontLines(
+      candidates,
+      ratios,
+      ceCount: ces.length,
+      requiredMember: fixed < 0 ? null : fixed,
+    );
     for (final (members, ceOptions, estimate) in fronts) {
       final front = [
         for (final (k, m) in members.indexed)
           candidates[m].data.copy()
             // the support-only member is the support; otherwise none
             ..supportType = candidates[m].supportOnly ? SupportSvtType.friend : SupportSvtType.none
-            ..equip1 = ceOptions[k] == 0 ? SvtEquipData() : ces[ceOptions[k] - 1].copy(),
+            ..equip1 = ceOptions[k] == 0 ? candidates[m].data.equip1.copy() : ces[ceOptions[k] - 1].copy(),
       ];
       // the cheap estimate per wave, for the list
       final coverage = List<double>.filled(waves, 0);
@@ -688,11 +721,21 @@ class _TeamRecommendPageState extends State<TeamRecommendPage> {
   }
 
   Widget _header(BuildContext context) {
+    final support = run.support;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (support != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                '${S.current.support_servant_short}: ${support.svt?.lName.l ?? ''}'
+                '${support.equip1.ce == null ? '' : ' · ${support.equip1.ce!.lName.l}'} (from your team)',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
           Row(
             children: [
               Expanded(

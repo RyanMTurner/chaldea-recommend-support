@@ -4,6 +4,7 @@
 // Run: flutter test test/fork --dart-define=APP_PATH=/path/to/app/data
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:chaldea/app/battle/models/battle.dart';
 import 'package:chaldea/app/modules/battle/team_generator/recommend.dart';
 // ignore: unused_import
 import 'package:chaldea/app/modules/battle/team_generator/team_generator.dart'; // the page compiles
@@ -127,6 +128,40 @@ void main() async {
     for (final (members, ceOptions, _) in loop0) {
       expect(ceOptions[members.indexOf(0)], 1, reason: 'the CE is on attacker 0');
       expect(ceOptions.where((o) => o == 1).length, 1, reason: 'one CE, one member');
+    }
+  });
+
+  test('a support set in the manual team is the only support, in every front line, keeping its CE', () {
+    final own = playable.take(3).toList();
+    for (final svt in own) {
+      db.curUser.svtStatusOf(svt.collectionNo).favorite = true;
+    }
+    // the support is a friend's copy of an owned servant: own copy + support copy is allowed
+    final fixed = TeamRecommender.supportData(own.first)..equip1 = SvtEquipData(ce: db.gameData.craftEssences[1]);
+    final candidates = TeamRecommender.candidates(fixedSupport: fixed);
+    expect(candidates.where((c) => c.supportOnly).length, 1);
+    final required = candidates.indexWhere((c) => c.supportOnly);
+    expect(candidates[required].data.equip1.ce, isNotNull);
+
+    // everyone attacks well enough; one CE to hand out
+    final ratios = [
+      for (int i = 0; i < candidates.length; i++)
+        [
+          [0.8, 0.8, 0.8],
+          [0.9, 0.9, 0.9],
+        ],
+    ];
+    final fronts = TeamRecommender.frontLines(candidates, ratios, ceCount: 1, requiredMember: required);
+    expect(fronts, isNotEmpty);
+    expect(
+      fronts.any((f) => f.$1.map((m) => candidates[m].svt.id).toSet().length < 3),
+      isTrue,
+      reason: 'the owned copy and the support copy of the same servant together',
+    );
+    for (final (members, ceOptions, _) in fronts) {
+      expect(members, contains(required));
+      expect(ceOptions[members.indexOf(required)], 0, reason: 'the support keeps its own CE');
+      expect(ceOptions.where((o) => o == 1).length, 1, reason: 'the CE goes to another member');
     }
   });
 }
