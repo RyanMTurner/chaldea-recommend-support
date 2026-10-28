@@ -61,25 +61,62 @@ void main() async {
       for (final (i, svt) in playable.take(6).indexed)
         TgCandidate(TeamRecommender.supportData(svt), supportOnly: i >= 4),
     ];
-    // 0 clears everything alone; 1 and 2 cover different waves; 3-5 can't attack
+    // 0 clears everything alone; 1 and 2 cover different waves; 3-5 can't attack (no CE option)
     final ratios = [
-      [1.0, 1.0, 1.0],
-      [0.9, 0.9, 0.1],
-      [0.1, 0.1, 0.8],
-      [0.0, 0.0, 0.0],
-      [0.0, 0.0, 0.0],
-      [0.0, 0.0, 0.0],
+      [
+        [1.0, 1.0, 1.0],
+      ],
+      [
+        [0.9, 0.9, 0.1],
+      ],
+      [
+        [0.1, 0.1, 0.8],
+      ],
+      for (int i = 0; i < 3; i++)
+        [
+          [0.0, 0.0, 0.0],
+        ],
     ];
     final fronts = TeamRecommender.frontLines(candidates, ratios);
     expect(fronts, isNotEmpty);
-    for (final (members, _) in fronts) {
+    for (final (members, _, _) in fronts) {
       expect(members.length, 3);
       expect(members.toSet().length, 3);
       expect(members.where((m) => candidates[m].supportOnly).length, lessThanOrEqualTo(1));
       for (int w = 0; w < 3; w++) {
-        expect(members.any((m) => ratios[m][w] >= 0.5), isTrue, reason: 'wave ${w + 1} covered: $members');
+        expect(members.any((m) => ratios[m][0][w] >= 0.5), isTrue, reason: 'wave ${w + 1} covered: $members');
       }
     }
     expect(fronts.any((f) => f.$1.contains(1) && f.$1.contains(2) && !f.$1.contains(0)), isTrue);
+  });
+
+  test('the CE goes where it covers the waves', () {
+    final candidates = [
+      for (final (i, svt) in playable.take(4).indexed)
+        TgCandidate(TeamRecommender.supportData(svt), supportOnly: i == 3),
+    ];
+    // per candidate: [no CE, with the CE]; 0 needs the CE for wave 3, 1 doesn't care
+    final ratios = [
+      [
+        [0.9, 0.9, 0.3],
+        [0.9, 0.9, 0.7],
+      ],
+      [
+        [0.6, 0.6, 0.6],
+        [0.6, 0.6, 0.6],
+      ],
+      for (int i = 0; i < 2; i++)
+        [
+          [0.0, 0.0, 0.0],
+          [0.0, 0.0, 0.0],
+        ],
+    ];
+    final fronts = TeamRecommender.frontLines(candidates, ratios, ceCount: 1);
+    final loop0 = fronts.where((f) => f.$1.first == 0 && !f.$1.contains(1)).toList();
+    expect(loop0, isNotEmpty, reason: 'attacker 0 loops only with the CE');
+    for (final (members, ceOptions, _) in loop0) {
+      expect(ceOptions[members.indexOf(0)], 1, reason: 'the CE is on attacker 0');
+      expect(ceOptions.where((o) => o == 1).length, 1, reason: 'one CE, one member');
+    }
   });
 }

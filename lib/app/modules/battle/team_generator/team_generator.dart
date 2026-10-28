@@ -169,12 +169,14 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
       quest: quest,
       mysticCode: state.formation.mysticCodeData.copy(),
       settings: state.settings.copy(),
+      // the manual team's CEs, front line first
+      ces: [for (final svt in state.formation.svts) svt.equip1],
     );
     router.pushPage(TeamRecommendPage(run: run, onSelect: _selectTeam), detail: true, popDetail: true);
     unawaited(run.start());
   }
 
-  /// Fills [team] into the six slots (its own levels, skills and support flag; CEs empty).
+  /// Fills [team] into the six slots (its own levels, skills, support flag and CEs).
   void _selectTeam(RecommendedTeam team) {
     final svts = [for (int index = 0; index < 6; index++) team.svts.getOrNull(index)?.copy() ?? PlayerSvtData.base()];
     if (mounted) {

@@ -18,12 +18,14 @@ import 'solver.dart';
 // 1. Pools: the user's owned servants below the bond cap ("own pool"), and every servant in the game for the
 //    support slot (the user's data when owned, otherwise 10/10/10 skills, max level, no grails, no appends).
 // 2. Attackers: each candidate fires a full NP with its own skills against each wave on its own, scored by the
-//    share of the wave's HP it removes (simulated, on worker threads).
+//    share of the wave's HP it removes (simulated, on worker threads), without a CE and with each of the CEs set
+//    in the manual team.
 // 3. Supports: NP charge and ATK/card/NP damage buffs they give allies (from skill data).
 // 4. Front lines in three shapes: one attacker + two supports, two attackers + one support, three attackers;
-//    at most one member from the support slot. Ranked by how well the attackers cover the waves.
+//    at most one member from the support slot. The manual team's CEs go to different members, wherever they
+//    cover the waves best. Ranked by how well the attackers cover the waves.
 // 5. The best candidates are checked with the solver; teams that clear are listed first.
-// Order Change isn't used, so the backups don't affect the clear: they're filled from the own pool.
+// Order Change isn't used, so the backups don't affect the clear: they stay empty.
 
 const kTeamRecommendWorkerTag = 'team_recommend';
 
@@ -128,24 +130,28 @@ class TeamRecommender {
   }
 
   /// Candidate front lines (3 members, at most one support-only) from attacker coverage [ratios]
-  /// (per candidate, per wave: share of the wave's HP its NP removes), best first.
-  static List<(List<int> members, double estimate)> frontLines(
+  /// (per candidate, per CE option, per wave: share of the wave's HP its NP removes; option 0 = no CE, option
+  /// i = CE i-1), best first. Each of the [ceCount] CEs goes to a different member: the assignment that covers
+  /// the waves best (CEs on attackers on a tie). Returns the members and the CE option of each member.
+  static List<(List<int> members, List<int> ceOptions, double estimate)> frontLines(
     List<TgCandidate> candidates,
-    List<List<double>> ratios, {
+    List<List<List<double>>> ratios, {
+    int ceCount = 0,
     int limit = 48,
   }) {
     const attackerThreshold = 0.5; // alone it removes half the wave: supports should do the rest
-    final waves = ratios.firstOrNull?.length ?? 0;
+    final waves = ratios.firstOrNull?.firstOrNull?.length ?? 0;
     if (waves == 0) return [];
-    double best(List<int> members, int wave) =>
-        members.map((m) => ratios[m][wave]).reduce(max).clamp(0, 1).toDouble();
-    bool covers(List<int> attackers) =>
-        List.generate(waves, (w) => w).every((w) => best(attackers, w) >= attackerThreshold);
+    final options = ceCount + 1;
+    double ratio(int m, int option, int wave) => ratios[m].getOrNull(option)?.getOrNull(wave) ?? 0;
+    double bestRatio(int m, int wave) => [for (int o = 0; o < options; o++) ratio(m, o, wave)].reduce(max);
 
     final attackers = [
       for (int i = 0; i < candidates.length; i++)
-        if (ratios[i].any((r) => r >= attackerThreshold)) i,
-    ]..sort((a, b) => Maths.sum(ratios[b]).compareTo(Maths.sum(ratios[a])));
+        if (List.generate(waves, (w) => bestRatio(i, w)).any((r) => r >= attackerThreshold)) i,
+    ];
+    double total(int m) => Maths.sum(List.generate(waves, (w) => bestRatio(m, w)));
+    attackers.sort((a, b) => total(b).compareTo(total(a)));
     final topAttackers = attackers.take(25).toList();
     final supportScores = [for (final c in candidates) supportScore(c.data)];
     final topSupports = List.generate(candidates.length, (i) => i)
@@ -160,21 +166,60 @@ class TeamRecommender {
       return ids.toSet().length == ids.length;
     }
 
-    double estimate(List<int> members, List<int> attackersInTeam) {
-      double coverage = 0;
-      for (int w = 0; w < waves; w++) {
-        coverage += best(attackersInTeam, w);
+    // every way to give the CEs to different members (attackers first, so they win ties)
+    List<List<int>> assignments(List<int> members, List<int> attackersInTeam) {
+      final order = [
+        for (int k = 0; k < members.length; k++)
+          if (attackersInTeam.contains(members[k])) k,
+        for (int k = 0; k < members.length; k++)
+          if (!attackersInTeam.contains(members[k])) k,
+      ];
+      final result = <List<int>>[];
+      void place(int ce, List<int> current) {
+        if (ce >= min(ceCount, members.length)) {
+          result.add(List.of(current));
+          return;
+        }
+        for (final k in order) {
+          if (current[k] != 0) continue;
+          current[k] = ce + 1;
+          place(ce + 1, current);
+          current[k] = 0;
+        }
       }
-      final support = members.map((m) => supportScores[m]).fold<double>(0, (a, b) => a + b);
-      return coverage * 100 + support;
+
+      place(0, List.filled(members.length, 0));
+      return result;
     }
 
-    final teams = <String, (List<int>, double)>{};
+    double coverage(List<int> members, List<int> ceOptions, List<int> attackersInTeam, int wave) {
+      double best = 0;
+      for (final (k, m) in members.indexed) {
+        if (!attackersInTeam.contains(m)) continue;
+        best = max(best, ratio(m, ceOptions[k], wave));
+      }
+      return best.clamp(0, 1).toDouble();
+    }
+
+    final teams = <String, (List<int>, List<int>, double)>{};
     void add(List<int> members, List<int> attackersInTeam) {
-      if (!valid(members) || !covers(attackersInTeam)) return;
+      if (!valid(members)) return;
+      List<int>? bestOptions;
+      double bestCoverage = -1;
+      for (final ceOptions in assignments(members, attackersInTeam)) {
+        final perWave = List.generate(waves, (w) => coverage(members, ceOptions, attackersInTeam, w));
+        if (perWave.any((c) => c < attackerThreshold)) continue;
+        final sum = Maths.sum(perWave);
+        if (sum > bestCoverage) {
+          bestCoverage = sum;
+          bestOptions = ceOptions;
+        }
+      }
+      if (bestOptions == null) return;
+      final support = members.map((m) => supportScores[m]).fold<double>(0, (a, b) => a + b);
+      final value = bestCoverage * 100 + support;
       final key = (members.toList()..sort()).join(',');
-      final value = estimate(members, attackersInTeam);
-      if ((teams[key]?.$2 ?? -1) < value) teams[key] = (members, value);
+      if ((teams[key]?.$3 ?? -1) < value) teams[key] = (members, bestOptions, value);
     }
 
     for (final a in topAttackers) {
@@ -198,10 +243,10 @@ class TeamRecommender {
       }
     }
 
-    final sorted = teams.values.toList()..sort((x, y) => y.$2.compareTo(x.$2));
+    final sorted = teams.values.toList()..sort((x, y) => y.$3.compareTo(x.$3));
     // variety: at most 4 teams per attacker
     final perAttacker = <int, int>{};
-    final result = <(List<int>, double)>[];
+    final result = <(List<int>, List<int>, double)>[];
     for (final team in sorted) {
       final lead = team.$1.first;
       if ((perAttacker[lead] ?? 0) >= 4) continue;
@@ -215,19 +260,25 @@ class TeamRecommender {
 
 // ===== worker tasks =====
 
-/// Payload of [_scoreTask]: the quest and candidates (stored data).
+/// Payload of [_scoreTask]: the quest, candidates and CEs (stored data).
 class _ScorePayload {
   final QuestPhase quest;
   final List<SvtSaveData?> svts;
-  const _ScorePayload(this.quest, this.svts);
+  final List<SvtEquipSaveData> ces;
+  const _ScorePayload(this.quest, this.svts, this.ces);
 }
 
-/// Per candidate, per wave: share of the wave's HP a full NP with the candidate's own skills removes.
+/// Per candidate, per CE option (none, then each CE), per wave: share of the wave's HP a full NP with the
+/// candidate's own skills removes.
 Future<Object?> _scoreTask(Object? payload, void Function(Object? progress) report) async {
   final work = payload as _ScorePayload;
-  final results = <List<double>>[];
+  final ces = [for (final ce in work.ces) await SvtEquipData.fromStoredData(ce)];
+  final results = <List<List<double>>>[];
   for (final (index, stored) in work.svts.indexed) {
-    results.add(await scoreAttacker(work.quest, await PlayerSvtData.fromStoredData(stored)));
+    final svt = await PlayerSvtData.fromStoredData(stored);
+    results.add([
+      for (final ce in [SvtEquipData(), ...ces]) await scoreAttacker(work.quest, svt.copy()..equip1 = ce.copy()),
+    ]);
     report(index + 1);
   }
   return results;
@@ -343,6 +394,9 @@ class TeamRecommendRun extends ChangeNotifier {
   final MysticCodeData mysticCode;
   final TeamGeneratorSettings settings;
 
+  /// CEs to hand out to the front line (the manual team's, at most 3).
+  final List<SvtEquipData> ces;
+
   /// Seconds the solver gets per team.
   final int timeLimitPerTeam;
 
@@ -350,8 +404,9 @@ class TeamRecommendRun extends ChangeNotifier {
     required this.quest,
     required this.mysticCode,
     required this.settings,
+    List<SvtEquipData> ces = const [],
     this.timeLimitPerTeam = 20,
-  });
+  }) : ces = ces.where((e) => e.ce != null).take(3).map((e) => e.copy()).toList();
 
   String stage = '';
   int done = 0;
@@ -422,22 +477,21 @@ class TeamRecommendRun extends ChangeNotifier {
       maxBond: settings.maxBond,
       supportIgnoresBondCap: settings.supportIgnoresBondCap,
     );
-    final ownPool = [
-      for (final c in candidates)
-        if (!c.supportOnly) c.svt,
-    ];
-
     // 2. attacker scoring (only servants with a damage NP)
     final attackerIndexes = [
       for (int i = 0; i < candidates.length; i++)
         if (candidates[i].data.td?.damageType != TdEffectFlag.support) i,
     ];
     final waves = Maths.max(quest.stages.map((e) => e.wave), 1);
-    final ratios = List.generate(candidates.length, (_) => List<double>.filled(waves, 0));
+    final options = ces.length + 1;
+    final ratios = List.generate(
+      candidates.length,
+      (_) => List.generate(options, (_) => List<double>.filled(waves, 0)),
+    );
     _update('Scoring attackers…', done: 0, total: attackerIndexes.length);
-    final scored = await _runParallel<List<double>>(
+    final scored = await _runParallel<List<List<double>>>(
       [for (final i in attackerIndexes) candidates[i].data.toStoredData()],
-      (part) => _ScorePayload(quest, part.cast<SvtSaveData?>()),
+      (part) => _ScorePayload(quest, part.cast<SvtSaveData?>(), [for (final ce in ces) ce.toStoredData()]),
       _scoreTask,
       onDone: (count) => _update('Scoring attackers…', done: count),
     );
@@ -448,19 +502,17 @@ class TeamRecommendRun extends ChangeNotifier {
 
     // 3-4. candidate front lines
     _update('Building teams…');
-    final fronts = TeamRecommender.frontLines(candidates, ratios);
-    for (final (members, estimate) in fronts) {
-      final front = [for (final m in members) candidates[m].data.copy()];
-      // the support-only member is the support; otherwise none
-      for (final (k, m) in members.indexed) {
-        front[k].supportType = candidates[m].supportOnly ? SupportSvtType.friend : SupportSvtType.none;
-      }
-      final used = {for (final m in members) candidates[m].svt.id};
-      final backups = [
-        for (final svt in ownPool)
-          if (!used.contains(svt.id)) svt,
-      ].take(3).map(TeamRecommender.ownData).toList();
-      teams.add(RecommendedTeam([...front, ...backups, ...List.filled(3 - backups.length, null)], estimate));
+    final fronts = TeamRecommender.frontLines(candidates, ratios, ceCount: ces.length);
+    for (final (members, ceOptions, estimate) in fronts) {
+      final front = [
+        for (final (k, m) in members.indexed)
+          candidates[m].data.copy()
+            // the support-only member is the support; otherwise none
+            ..supportType = candidates[m].supportOnly ? SupportSvtType.friend : SupportSvtType.none
+            ..equip1 = ceOptions[k] == 0 ? SvtEquipData() : ces[ceOptions[k] - 1].copy(),
+      ];
+      // no Order Change yet: the backups don't matter, they stay empty
+      teams.add(RecommendedTeam([...front, null, null, null], estimate));
     }
     if (_cancelled || teams.isEmpty) return;
 
@@ -630,10 +682,11 @@ class _TeamRecommendPageState extends State<TeamRecommendPage> {
     final theme = Theme.of(context);
     final supportIndex = team.supportIndex;
 
-    // servant icon with its CE slot on the right (CEs aren't recommended yet: always empty)
+    // servant icon with its CE on the right
     Widget slot(int i) {
       final data = team.svts.getOrNull(i);
       final svt = data?.svt;
+      final ce = data?.equip1.ce;
       return Expanded(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -648,7 +701,11 @@ class _TeamRecommendPageState extends State<TeamRecommendPage> {
                       : svt.iconBuilder(context: context, width: 44, jumpToDetail: true),
                 ),
                 const SizedBox(width: 2),
-                Flexible(child: db.getIconImage(Atlas.common.emptyCeIcon, width: 32)),
+                Flexible(
+                  child: ce == null
+                      ? db.getIconImage(Atlas.common.emptyCeIcon, width: 32)
+                      : ce.iconBuilder(context: context, width: 32, jumpToDetail: true),
+                ),
               ],
             ),
             const SizedBox(height: 2),

@@ -31,8 +31,11 @@ void main() async {
         maxBond: saved.maxBond,
         supportIgnoresBondCap: saved.supportIgnoresBondCap,
       ),
+      ces: [for (final stored in saved.formation.svts) (await PlayerSvtData.fromStoredData(stored)).equip1],
     );
-    final out = <String>['Quest ${quest.id} ${quest.lName.l}, bond ≤${saved.maxBond}'];
+    final out = <String>[
+      'Quest ${quest.id} ${quest.lName.l}, bond ≤${saved.maxBond}, CEs: ${run.ces.map((e) => e.ce?.lName.l).join(', ')}',
+    ];
     String lastStage = '';
     run.addListener(() {
       if (run.stage != lastStage) out.add('${watch.elapsed} ${lastStage = run.stage}');
@@ -42,7 +45,7 @@ void main() async {
     for (final team in run.teams) {
       out.add(
         '${team.status.name} est ${team.estimate.toStringAsFixed(0)}: '
-        '${team.svts.take(3).map((s) => '${s?.svt?.lName.l}${s?.supportType.isSupport == true ? ' (support)' : ''}').join(', ')}'
+        '${team.svts.take(3).map((s) => '${s?.svt?.lName.l}${s?.supportType.isSupport == true ? ' (support)' : ''}${s?.equip1.ce == null ? '' : ' [${s!.equip1.ce!.lName.l}]'}').join(', ')}'
         ' | ${team.message}',
       );
     }
