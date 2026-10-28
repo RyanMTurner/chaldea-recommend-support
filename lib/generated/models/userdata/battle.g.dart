@@ -98,6 +98,10 @@ TeamGeneratorSaveData _$TeamGeneratorSaveDataFromJson(Map json) =>
         workers: $checkedConvert('workers', (v) => (v as num?)?.toInt()),
         maxBond: $checkedConvert('maxBond', (v) => (v as num?)?.toInt() ?? 0),
         supportIgnoresBondCap: $checkedConvert('supportIgnoresBondCap', (v) => v as bool? ?? false),
+        excludedSvts: $checkedConvert(
+          'excludedSvts',
+          (v) => (v as List<dynamic>?)?.map((e) => (e as num).toInt()).toSet(),
+        ),
         quest: $checkedConvert(
           'quest',
           (v) => v == null ? null : BattleQuestInfo.fromJson(Map<String, dynamic>.from(v as Map)),
@@ -116,6 +120,7 @@ Map<String, dynamic> _$TeamGeneratorSaveDataToJson(TeamGeneratorSaveData instanc
   'workers': instance.workers,
   'maxBond': instance.maxBond,
   'supportIgnoresBondCap': instance.supportIgnoresBondCap,
+  'excludedSvts': instance.excludedSvts.toList(),
   'quest': instance.quest?.toJson(),
   'formation': instance.formation.toJson(),
 };

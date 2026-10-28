@@ -56,6 +56,16 @@ void main() async {
     expect(withCap.firstWhere((c) => c.svt.id == svt.id).supportOnly, isTrue);
   });
 
+  test('excluded servants are never candidates, not even as the support', () {
+    final owned = playable[0], other = playable[1];
+    db.curUser.svtStatusOf(owned.collectionNo).favorite = true;
+    final excluded = {owned.id, other.id};
+    expect(TeamRecommender.ownPool(excluded: excluded).any((s) => s.id == owned.id), isFalse);
+    final list = TeamRecommender.candidates(excluded: excluded);
+    expect(list.any((c) => excluded.contains(c.svt.id)), isFalse);
+    expect(TeamRecommender.candidates().any((c) => c.svt.id == other.id), isTrue, reason: 'listed when not excluded');
+  });
+
   test('front lines cover every wave, at most one support-only member', () {
     final candidates = [
       for (final (i, svt) in playable.take(6).indexed)

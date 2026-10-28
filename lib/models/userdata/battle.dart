@@ -179,6 +179,9 @@ class TeamGeneratorSaveData {
 
   /// Recommended teams: the support may be a servant at the bond cap (not used yet)
   bool supportIgnoresBondCap;
+
+  /// Recommended teams: servants never used (svt ids), like Team Bond's excluded servants
+  Set<int> excludedSvts;
   BattleQuestInfo? quest;
   BattleTeamFormation formation;
 
@@ -188,9 +191,11 @@ class TeamGeneratorSaveData {
     this.workers,
     this.maxBond = 0,
     this.supportIgnoresBondCap = false,
+    Set<int>? excludedSvts,
     this.quest,
     BattleTeamFormation? formation,
-  }) : formation = formation ?? BattleTeamFormation();
+  }) : excludedSvts = excludedSvts ?? {},
+       formation = formation ?? BattleTeamFormation();
 
   factory TeamGeneratorSaveData.fromJson(Map<String, dynamic> json) => _$TeamGeneratorSaveDataFromJson(json);
 

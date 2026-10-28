@@ -17,6 +17,7 @@ void main() async {
         maxCommandSpells: 2,
         timeLimitSeconds: 120,
         workers: 3,
+        excludedSvts: {100100, 504500},
         quest: BattleQuestInfo(id: 94000000, phase: 3, enemyHash: 'abc'),
         formation: BattleTeamFormation.fromList(
           svts: [
@@ -32,6 +33,7 @@ void main() async {
     expect(restored.maxCommandSpells, 2);
     expect(restored.timeLimitSeconds, 120);
     expect(restored.workers, 3);
+    expect(restored.excludedSvts, {100100, 504500});
     expect(restored.quest?.id, 94000000);
     expect(restored.quest?.phase, 3);
     expect(restored.quest?.enemyHash, 'abc');

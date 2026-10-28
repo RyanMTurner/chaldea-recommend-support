@@ -15,7 +15,9 @@ import 'package:chaldea/packages/logger.dart';
 import 'package:chaldea/utils/utils.dart';
 import 'package:chaldea/widgets/widgets.dart';
 
+import '../../bond/solver/results.dart';
 import '../../mystic_code/mystic_code_list.dart';
+import '../../servant/servant_list.dart';
 import '../battle_simulation.dart';
 import '../formation/team.dart';
 import 'recommend.dart';
@@ -75,7 +77,8 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
       if (saved.workers != null) state.settings.workers = saved.workers!;
       state.settings
         ..maxBond = saved.maxBond
-        ..supportIgnoresBondCap = saved.supportIgnoresBondCap;
+        ..supportIgnoresBondCap = saved.supportIgnoresBondCap
+        ..excludedSvts = Set.of(saved.excludedSvts);
 
       final svts = <PlayerSvtData>[];
       for (final svt in saved.formation.svts) {
@@ -113,6 +116,7 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
       workers: state.settings.workers,
       maxBond: state.settings.maxBond,
       supportIgnoresBondCap: state.settings.supportIgnoresBondCap,
+      excludedSvts: Set.of(state.settings.excludedSvts),
       quest: quest == null ? null : BattleQuestInfo.quest(quest),
       // fromList: an empty 3rd slot stays empty instead of becoming a support placeholder
       formation: BattleTeamFormation.fromList(
@@ -352,6 +356,23 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
                 onChanged: (v) => _changed(() => state.settings.supportIgnoresBondCap = v ?? false),
               ),
             ],
+          ),
+          // recommended teams never use these servants, same as Team Bond's list
+          BondExcludedCards(
+            title: '${S.current.exclude} - ${S.current.servant}',
+            ids: state.settings.excludedSvts,
+            servant: true,
+            onAdd: () {
+              router.pushPage(
+                ServantListPage(
+                  filterData: SvtFilterData(useGrid: true),
+                  onSelected: (svt) {
+                    if (mounted) _changed(() => state.settings.excludedSvts.add(svt.id));
+                  },
+                ),
+              );
+            },
+            onRemove: (id) => _changed(() => state.settings.excludedSvts.remove(id)),
           ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),

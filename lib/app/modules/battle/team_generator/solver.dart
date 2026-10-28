@@ -28,6 +28,9 @@ class TeamGeneratorSettings {
   /// Recommended teams only: the support may be a servant at the bond cap (not used yet).
   bool supportIgnoresBondCap;
 
+  /// Recommended teams only: servants never used (svt ids).
+  Set<int> excludedSvts;
+
   TeamGeneratorSettings({
     this.maxCommandSpells = 0,
     this.timeLimitSeconds = 60,
@@ -35,7 +38,9 @@ class TeamGeneratorSettings {
     int? workers,
     this.maxBond = 0,
     this.supportIgnoresBondCap = false,
-  }) : workers = workers ?? defaultWorkers;
+    Set<int>? excludedSvts,
+  }) : workers = workers ?? defaultWorkers,
+       excludedSvts = excludedSvts ?? {};
 
   /// CPU cores - 1, at least 1 and at most 4 (each worker holds its own copy of the game data). 0 on web.
   static int get defaultWorkers => kIsWeb ? 0 : max(1, min(4, Platform.numberOfProcessors - 1));
@@ -47,6 +52,7 @@ class TeamGeneratorSettings {
     workers: workers,
     maxBond: maxBond,
     supportIgnoresBondCap: supportIgnoresBondCap,
+    excludedSvts: Set.of(excludedSvts),
   );
 }
 

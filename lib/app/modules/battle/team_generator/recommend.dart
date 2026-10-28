@@ -59,11 +59,11 @@ class RecommendedTeam {
 }
 
 class TeamRecommender {
-  /// Owned servants (favorites) below [maxBond] (0 = any), newest first.
-  static List<Servant> ownPool({int maxBond = 0}) {
+  /// Owned servants (favorites) below [maxBond] (0 = any) and not [excluded], newest first.
+  static List<Servant> ownPool({int maxBond = 0, Set<int> excluded = const {}}) {
     final owned = <Servant>[];
     for (final svt in db.gameData.servantsNoDup.values) {
-      if (!svt.isUserSvt) continue;
+      if (!svt.isUserSvt || excluded.contains(svt.id)) continue;
       final status = db.curUser.servants[svt.collectionNo];
       if (status == null || !status.favorite) continue;
       if (maxBond > 0 && status.bond >= maxBond) continue;
@@ -96,11 +96,16 @@ class TeamRecommender {
 
   /// Own pool members, plus every other servant as a support-only candidate. Owned servants at or above the
   /// bond cap are support candidates only with [supportIgnoresBondCap].
-  static List<TgCandidate> candidates({int maxBond = 0, bool supportIgnoresBondCap = false}) {
-    final own = ownPool(maxBond: maxBond).toSet();
+  /// [excluded] servants (svt ids) are never used, not even as the support.
+  static List<TgCandidate> candidates({
+    int maxBond = 0,
+    bool supportIgnoresBondCap = false,
+    Set<int> excluded = const {},
+  }) {
+    final own = ownPool(maxBond: maxBond, excluded: excluded).toSet();
     final result = [for (final svt in own) TgCandidate(ownData(svt), supportOnly: false)];
     for (final svt in db.gameData.servantsNoDup.values) {
-      if (!svt.isUserSvt || own.contains(svt)) continue;
+      if (!svt.isUserSvt || own.contains(svt) || excluded.contains(svt.id)) continue;
       final owned = db.curUser.servants[svt.collectionNo]?.favorite == true;
       if (owned && !supportIgnoresBondCap) continue; // owned at the bond cap
       result.add(TgCandidate(supportData(svt), supportOnly: true));
@@ -405,7 +410,7 @@ class TeamRecommendRun extends ChangeNotifier {
     required this.mysticCode,
     required this.settings,
     List<SvtEquipData> ces = const [],
-    this.timeLimitPerTeam = 20,
+    this.timeLimitPerTeam = 60,
   }) : ces = ces.where((e) => e.ce != null).take(3).map((e) => e.copy()).toList();
 
   String stage = '';
@@ -476,6 +481,7 @@ class TeamRecommendRun extends ChangeNotifier {
     final candidates = TeamRecommender.candidates(
       maxBond: settings.maxBond,
       supportIgnoresBondCap: settings.supportIgnoresBondCap,
+      excluded: settings.excludedSvts,
     );
     // 2. attacker scoring (only servants with a damage NP)
     final attackerIndexes = [
