@@ -46,11 +46,16 @@ class RecommendedTeam {
   /// Six slots, front line first. The support slot has [SupportSvtType.friend].
   final List<PlayerSvtData?> svts;
   final double estimate;
+
+  /// Cheap clear estimate, per wave: the best share of the wave's HP one front-line NP removes on its own
+  /// (with its own skills and CE), and which front-line slot that is.
+  final List<double> waveCoverage;
+  final List<int?> waveAttacker;
   TgTeamStatus status = TgTeamStatus.pending;
   int commandSpells = 0;
   String message = '';
 
-  RecommendedTeam(this.svts, this.estimate);
+  RecommendedTeam(this.svts, this.estimate, {this.waveCoverage = const [], this.waveAttacker = const []});
 
   int? get supportIndex {
     final index = svts.indexWhere((e) => e?.supportType.isSupport == true);
@@ -439,15 +444,16 @@ class TeamRecommendRun extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Teams to show: cleared (fewest Command Spells first), then unchecked, best estimate first.
-  List<RecommendedTeam> get shownTeams {
+  /// Teams to show: cleared (fewest Command Spells first), then unchecked, best estimate first; with
+  /// [includeFailed], the teams that don't clear last.
+  List<RecommendedTeam> shownTeams({bool includeFailed = false}) {
     int rank(TgTeamStatus status) => switch (status) {
       TgTeamStatus.cleared => 0,
       TgTeamStatus.checking => 1,
       TgTeamStatus.pending => 2,
       TgTeamStatus.failed => 3,
     };
-    return teams.where((t) => t.status != TgTeamStatus.failed).toList()..sort((a, b) {
+    return teams.where((t) => includeFailed || t.status != TgTeamStatus.failed).toList()..sort((a, b) {
       final r = rank(a.status) - rank(b.status);
       if (r != 0) return r;
       if (a.commandSpells != b.commandSpells) return a.commandSpells - b.commandSpells;
@@ -517,8 +523,22 @@ class TeamRecommendRun extends ChangeNotifier {
             ..supportType = candidates[m].supportOnly ? SupportSvtType.friend : SupportSvtType.none
             ..equip1 = ceOptions[k] == 0 ? SvtEquipData() : ces[ceOptions[k] - 1].copy(),
       ];
+      // the cheap estimate per wave, for the list
+      final coverage = List<double>.filled(waves, 0);
+      final attacker = List<int?>.filled(waves, null);
+      for (int w = 0; w < waves; w++) {
+        for (final (k, m) in members.indexed) {
+          final r = ratios[m][ceOptions[k]][w];
+          if (r > coverage[w]) {
+            coverage[w] = r;
+            attacker[w] = k;
+          }
+        }
+      }
       // no Order Change yet: the backups don't matter, they stay empty
-      teams.add(RecommendedTeam([...front, null, null, null], estimate));
+      teams.add(
+        RecommendedTeam([...front, null, null, null], estimate, waveCoverage: coverage, waveAttacker: attacker),
+      );
     }
     if (_cancelled || teams.isEmpty) return;
 
@@ -622,6 +642,9 @@ class TeamRecommendPage extends StatefulWidget {
 class _TeamRecommendPageState extends State<TeamRecommendPage> {
   TeamRecommendRun get run => widget.run;
 
+  /// Also list the teams the solver found don't clear.
+  bool _showFailed = false;
+
   @override
   void dispose() {
     run.cancel();
@@ -635,7 +658,7 @@ class _TeamRecommendPageState extends State<TeamRecommendPage> {
       body: ListenableBuilder(
         listenable: run,
         builder: (context, _) {
-          final teams = run.shownTeams;
+          final teams = run.shownTeams(includeFailed: _showFailed);
           final failed = run.failedCount;
           return ListView(
             padding: const EdgeInsets.only(bottom: 16),
@@ -645,10 +668,16 @@ class _TeamRecommendPageState extends State<TeamRecommendPage> {
               if (failed > 0)
                 Padding(
                   padding: const EdgeInsets.all(12),
-                  child: Text(
-                    '$failed checked team(s) didn\'t clear and are hidden.',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.bodySmall,
+                  child: Center(
+                    child: TextButton.icon(
+                      onPressed: () => setState(() => _showFailed = !_showFailed),
+                      icon: Icon(_showFailed ? Icons.visibility_off : Icons.visibility),
+                      label: Text(
+                        _showFailed
+                            ? 'Hide the $failed team(s) that don\'t clear'
+                            : 'Show the $failed team(s) that don\'t clear',
+                      ),
+                    ),
                   ),
                 ),
             ],
@@ -740,6 +769,20 @@ class _TeamRecommendPageState extends State<TeamRecommendPage> {
       TgTeamStatus.failed => (Icons.error_outline, theme.colorScheme.error, 'Doesn\'t clear'),
     };
 
+    // cheap estimate: share of each wave's HP the best front-line NP removes on its own
+    String waveText(int w) {
+      final percent = (team.waveCoverage[w] * 100).round();
+      final slot = team.waveAttacker.getOrNull(w);
+      final name = slot == null ? null : team.svts.getOrNull(slot)?.svt?.lName.l;
+      return 'W${w + 1} $percent%${name == null ? '' : ' $name'}';
+    }
+
+    final details = [
+      if (team.waveCoverage.isNotEmpty)
+        'Estimate (one NP alone): ${[for (int w = 0; w < team.waveCoverage.length; w++) waveText(w)].join(' · ')}',
+      if (team.status == TgTeamStatus.failed && team.message.isNotEmpty) team.message,
+    ];
+
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       child: Padding(
@@ -775,6 +818,11 @@ class _TeamRecommendPageState extends State<TeamRecommendPage> {
                 for (int i = 3; i < 6; i++) slot(i),
               ],
             ),
+            if (details.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              for (final line in details)
+                Text(line, style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor)),
+            ],
           ],
         ),
       ),
