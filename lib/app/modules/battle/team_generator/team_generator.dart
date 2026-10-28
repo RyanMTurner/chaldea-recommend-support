@@ -8,6 +8,7 @@ import 'package:flutter_easyloading/flutter_easyloading.dart';
 import 'package:chaldea/app/api/atlas.dart';
 import 'package:chaldea/app/app.dart';
 import 'package:chaldea/app/battle/models/battle.dart';
+import 'package:chaldea/app/battle/utils/battle_worker_pool.dart';
 import 'package:chaldea/generated/l10n.dart';
 import 'package:chaldea/models/models.dart';
 import 'package:chaldea/packages/logger.dart';
@@ -128,6 +129,7 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
     _solver?.cancel();
     // each worker holds a copy of the game data, free it when leaving the page
     unawaited(TeamGeneratorWorkerPool.disposeCurrent());
+    unawaited(BattleWorkerPool.disposeTag(kTeamRecommendWorkerTag));
     super.dispose();
   }
 
@@ -155,30 +157,26 @@ class _TeamGeneratorPageState extends State<TeamGeneratorPage> {
     ).showDialog(context);
   }
 
-  /// Lists recommended teams on the right half of the screen (a full page on narrow screens).
+  /// Lists recommended teams on the right half of the screen (a full page on narrow screens): candidates from
+  /// the roster, checked with the solver as they come in.
   void _recommendTeams() {
-    router.pushPage(
-      TeamRecommendPage(
-        teams: TeamRecommender.recommend(
-          maxBond: state.settings.maxBond,
-          supportIgnoresBondCap: state.settings.supportIgnoresBondCap,
-        ),
-        onSelect: _selectTeam,
-      ),
-      detail: true,
-      popDetail: true,
+    final quest = state.quest;
+    if (quest == null) {
+      EasyLoading.showError('Select a quest first');
+      return;
+    }
+    final run = TeamRecommendRun(
+      quest: quest,
+      mysticCode: state.formation.mysticCodeData.copy(),
+      settings: state.settings.copy(),
     );
+    router.pushPage(TeamRecommendPage(run: run, onSelect: _selectTeam), detail: true, popDetail: true);
+    unawaited(run.start());
   }
 
-  /// Fills [team] into the six slots with the player's own data for each servant (CEs cleared).
-  void _selectTeam(List<Servant> team) {
-    final svts = [
-      for (int index = 0; index < 6; index++)
-        if (team.getOrNull(index) case final svt?)
-          PlayerSvtData.base()..onSelectServant(svt, source: PreferPlayerSvtDataSource.current)
-        else
-          PlayerSvtData.base(),
-    ];
+  /// Fills [team] into the six slots (its own levels, skills and support flag; CEs empty).
+  void _selectTeam(RecommendedTeam team) {
+    final svts = [for (int index = 0; index < 6; index++) team.svts.getOrNull(index)?.copy() ?? PlayerSvtData.base()];
     if (mounted) {
       _changed(() => state.formation.updateSvts(svts));
     } else {

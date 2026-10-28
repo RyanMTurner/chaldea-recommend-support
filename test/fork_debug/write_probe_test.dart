@@ -30,7 +30,10 @@ void main() async {
       formation: team,
       settings: TeamGeneratorSettings(maxCommandSpells: 0, timeLimitSeconds: 120, workers: 0),
     ).solve();
-    out.add('after solve (${result.success}): ${stamp()}');
+    out.add('after solve (${result.success}): ${stamp()} ${result.message} ${result.simulations} attacks ${result.elapsedMilliseconds}ms');
+    for (final turn in result.turns) {
+      out.add('  W${turn.wave}: ${turn.steps.join('; ')}');
+    }
     await Future.delayed(const Duration(seconds: 12)); // debounced saves fire after 10s
     out.add('after 12s: ${stamp()}');
     await File('test_trace.log').writeAsString(out.join('\n'));
