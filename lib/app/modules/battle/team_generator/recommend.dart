@@ -17,9 +17,9 @@ import 'solver.dart';
 //
 // 1. Pools: the user's owned servants below the bond cap ("own pool"), and every servant in the game for the
 //    support slot (the user's data when owned, otherwise 10/10/10 skills, max level, no grails, no appends).
-// 2. Attackers: each candidate fires a full NP with its own skills against each wave on its own, scored by the
-//    share of the wave's HP it removes (simulated, on worker threads), without a CE and with each of the CEs set
-//    in the manual team.
+// 2. Attackers: each candidate fires a full NP with its own skills (plus the support's, when one is set in the
+//    manual team) against each wave on its own, scored by the share of the wave's HP it removes (simulated,
+//    on worker threads), without a CE and with each of the CEs set in the manual team.
 // 3. Supports: NP charge and ATK/card/NP damage buffs they give allies (from skill data).
 // 4. Front lines in three shapes: one attacker + two supports, two attackers + one support, three attackers;
 //    at most one member from the support slot. The manual team's CEs go to different members, wherever they
@@ -295,20 +295,27 @@ class _ScorePayload {
   final QuestPhase quest;
   final List<SvtSaveData?> svts;
   final List<SvtEquipSaveData> ces;
-  const _ScorePayload(this.quest, this.svts, this.ces);
+
+  /// The support set in the manual team: its skills (and CE) buff every candidate.
+  final SvtSaveData? support;
+  const _ScorePayload(this.quest, this.svts, this.ces, this.support);
 }
 
 /// Per candidate, per CE option (none, then each CE), per wave: share of the wave's HP a full NP with the
-/// candidate's own skills removes.
+/// candidate's own skills (and the set support's) removes.
 Future<Object?> _scoreTask(Object? payload, void Function(Object? progress) report) async {
   final work = payload as _ScorePayload;
   final ces = [for (final ce in work.ces) await SvtEquipData.fromStoredData(ce)];
+  final support = work.support == null ? null : await PlayerSvtData.fromStoredData(work.support);
   final results = <List<List<double>>>[];
   for (final (index, stored) in work.svts.indexed) {
     final svt = await PlayerSvtData.fromStoredData(stored);
+    // the support candidate itself is scored alone
+    final helper = svt.supportType.isSupport ? null : support;
     results.add([
       // option 0: the candidate's own CE (none, except a support set in the manual team)
-      for (final ce in [svt.equip1, ...ces]) await scoreAttacker(work.quest, svt.copy()..equip1 = ce.copy()),
+      for (final ce in [svt.equip1, ...ces])
+        await scoreAttacker(work.quest, svt.copy()..equip1 = ce.copy(), support: helper),
     ]);
     report(index + 1);
   }
@@ -316,7 +323,8 @@ Future<Object?> _scoreTask(Object? payload, void Function(Object? progress) repo
 }
 
 /// Share of each wave's HP [svt]'s NP removes (1.0 = cleared), firing with its own skills and a full gauge.
-Future<List<double>> scoreAttacker(QuestPhase quest, PlayerSvtData svt) async {
+/// With a [support] beside it, the support's skills are used too (single-ally ones on [svt]) and its CE applies.
+Future<List<double>> scoreAttacker(QuestPhase quest, PlayerSvtData svt, {PlayerSvtData? support}) async {
   final waves = Maths.max(quest.stages.map((e) => e.wave), 1);
   final ratios = List<double>.filled(waves, 0);
   final copy = svt.copy()..supportType = SupportSvtType.none;
@@ -326,7 +334,8 @@ Future<List<double>> scoreAttacker(QuestPhase quest, PlayerSvtData svt) async {
     battle.options
       ..random = ConstData.constants.attackRateRandomMin
       ..threshold = 1000;
-    await battle.init(quest, [copy], null);
+    // every ready skill of both is used below, single-ally ones on the candidate (first slot)
+    await battle.init(quest, [copy, if (support != null) support.copy()..supportType = SupportSvtType.friend], null);
     for (int wave = 0; wave < waves; wave++) {
       if (battle.isBattleFinished) break;
       final depth = battle.snapshots.length;
@@ -530,7 +539,12 @@ class TeamRecommendRun extends ChangeNotifier {
     _update('Scoring attackers…', done: 0, total: attackerIndexes.length);
     final scored = await _runParallel<List<List<double>>>(
       [for (final i in attackerIndexes) candidates[i].data.toStoredData()],
-      (part) => _ScorePayload(quest, part.cast<SvtSaveData?>(), [for (final ce in ces) ce.toStoredData()]),
+      (part) => _ScorePayload(
+        quest,
+        part.cast<SvtSaveData?>(),
+        [for (final ce in ces) ce.toStoredData()],
+        support?.toStoredData(),
+      ),
       _scoreTask,
       onDone: (count) => _update('Scoring attackers…', done: count),
     );

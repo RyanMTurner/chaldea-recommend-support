@@ -164,4 +164,23 @@ void main() async {
       expect(ceOptions.where((o) => o == 1).length, 1, reason: 'the CE goes to another member');
     }
   });
+
+  test('cheap scoring with the set support: its buffs raise the attacker\'s share of each wave', () async {
+    int waveCount(QuestPhase q) => q.stages.map((e) => e.wave).fold(0, (a, b) => a > b ? a : b);
+    final quest = db.gameData.questPhases.values.firstWhere(
+      (q) => q.type == QuestType.free && waveCount(q) == 3 && q.stages.every((s) => s.enemies.isNotEmpty),
+    );
+    // a weak Altria (Lv.1 NP1) doesn't clear on her own; Merlin's party ATK/Buster buffs add damage
+    final altria = PlayerSvtData.id(100100)
+      ..lv = 1
+      ..tdLv = 1;
+    final merlin = TeamRecommender.supportData(db.gameData.servantsById[500800]!);
+    final alone = await scoreAttacker(quest, altria);
+    final helped = await scoreAttacker(quest, altria, support: merlin);
+    expect(alone.length, 3);
+    for (int w = 0; w < 3; w++) {
+      expect(helped[w], greaterThanOrEqualTo(alone[w]), reason: 'wave ${w + 1}: $alone vs $helped');
+    }
+    expect(helped.reduce((a, b) => a + b), greaterThan(alone.reduce((a, b) => a + b)), reason: '$alone vs $helped');
+  });
 }
