@@ -1511,6 +1511,9 @@ class FormationBondOption {
   bool bondNotFullOnly;
   Set<int> excludedSvts;
   Set<int> excludedCes;
+
+  /// Rarities a servant may have to be added to the team by the solver. Empty = any rarity.
+  Set<int> svtRarities;
   int maxCandidateTeams;
 
   /// Usable formation positions, including support.
@@ -1535,6 +1538,7 @@ class FormationBondOption {
     this.bondNotFullOnly = false,
     Set<int>? excludedSvts,
     Set<int>? excludedCes,
+    Set<int>? svtRarities,
     this.maxCandidateTeams = 100,
     this.maxServants = 6,
     this.searchFixedAscensions = true,
@@ -1543,7 +1547,8 @@ class FormationBondOption {
        campaigns = campaigns ?? {},
        svtBonus = svtBonus ?? List.generate(6, (_) => FormationBondSvtBonus()),
        excludedSvts = excludedSvts ?? {},
-       excludedCes = excludedCes ?? {};
+       excludedCes = excludedCes ?? {},
+       svtRarities = svtRarities ?? {};
 
   factory FormationBondOption.fromJson(Map<String, dynamic> json) {
     final option = _$FormationBondOptionFromJson(json);
@@ -1558,6 +1563,9 @@ class FormationBondOption {
   }
 
   Map<String, dynamic> toJson() => _$FormationBondOptionToJson(this);
+
+  /// Whether a servant of [rarity] passes the rarity filter (no rarity selected = all pass).
+  bool matchesSvtRarity(int rarity) => svtRarities.isEmpty || svtRarities.contains(rarity);
 
   FormationBondOption copy() {
     final option = FormationBondOption(
@@ -1578,6 +1586,7 @@ class FormationBondOption {
       bondNotFullOnly: bondNotFullOnly,
       excludedSvts: Set.of(excludedSvts),
       excludedCes: Set.of(excludedCes),
+      svtRarities: Set.of(svtRarities),
       maxCandidateTeams: maxCandidateTeams,
       maxServants: maxServants,
       searchFixedAscensions: searchFixedAscensions,

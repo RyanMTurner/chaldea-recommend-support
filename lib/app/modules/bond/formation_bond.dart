@@ -10,6 +10,7 @@ import 'package:chaldea/app/api/atlas.dart';
 import 'package:chaldea/app/app.dart';
 import 'package:chaldea/app/battle/models/user.dart';
 import 'package:chaldea/app/modules/common/builders.dart';
+import 'package:chaldea/app/modules/common/filter_group.dart';
 import 'package:chaldea/app/modules/craft_essence/craft_list.dart';
 import 'package:chaldea/app/modules/servant/servant_list.dart';
 import 'package:chaldea/generated/l10n.dart';
@@ -787,6 +788,17 @@ class _FormationBondPageState extends State<FormationBondPage> with SingleTicker
             subtitle: Text(S.current.servant),
             value: option.favoriteSvtOnly,
             onChanged: (v) => updateSharedInput(() => option.favoriteSvtOnly = v),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: FilterGroup<int>(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              title: Text(S.current.filter_sort_rarity, style: Theme.of(context).textTheme.bodyMedium),
+              options: const [0, 1, 2, 3, 4, 5],
+              values: FilterGroupData<int>(options: option.svtRarities.toSet()),
+              optionBuilder: (v) => Text('$v$kStarChar'),
+              onFilterChanged: (data, _) => updateSharedInput(() => option.svtRarities = data.options.toSet()),
+            ),
           ),
           ListTile(
             dense: true,

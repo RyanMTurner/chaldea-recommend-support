@@ -1331,6 +1331,7 @@ class FormationBondSolver {
         if (releasedAt > 0 && releasedAt > quest.closedAt) continue;
       }
       if (option.favoriteSvtOnly && !svt.status.favorite) continue;
+      if (!option.matchesSvtRarity(svt.rarity)) continue;
       if (option.maxBond > 0 && svt.status.bond >= option.maxBond) continue;
       if (option.bondNotFullOnly && svt.status.isReachBondLimit) continue;
       final effects = _eventEffects(svt);
