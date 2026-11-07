@@ -19,6 +19,7 @@ import 'package:chaldea/utils/utils.dart';
 import 'package:chaldea/widgets/widgets.dart';
 
 import '../battle/formation/team.dart';
+import '../battle/simulation_preview.dart';
 import 'bond_rules.dart';
 import 'formation_bond_calc.dart';
 import 'solver/results.dart';
@@ -182,6 +183,20 @@ class _FormationBondPageState extends State<FormationBondPage> with SingleTicker
 
   void validate() {
     option.validate(questEntity);
+  }
+
+  /// Opens Laplace Battle Simulation team setup with this page's quest and team.
+  ///
+  /// The setup page loads its team from the saved battle-sim team, so this team is written there first
+  /// (replacing the team last used in the simulator); the simulator's own options are left as they were.
+  void openBattleSimulation() {
+    if (!_runtime.restored) return;
+    final simTeam = db.settings.battleSim.curTeam;
+    simTeam.formation = formation.copy().toFormationData();
+    final quest = questEntity;
+    simTeam.quest = quest == null ? null : BattleQuestInfo.quest(quest);
+    db.notifySettings();
+    router.pushPage(SimulationPreview(region: option.quest?.region, questPhase: quest));
   }
 
   List<SvtBondBonusResult> calcResults() => option.calcResults(questEntity, formation);
@@ -435,9 +450,22 @@ class _FormationBondPageState extends State<FormationBondPage> with SingleTicker
           padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
           children: [
             Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 // Matches the bond table's label column so servants line up with their columns.
-                const SizedBox(width: _bondTableLabelWidth),
+                SizedBox(
+                  width: _bondTableLabelWidth,
+                  child: Padding(
+                    // centre the button on the CE row (CE image above its "Lv." label)
+                    padding: const EdgeInsets.only(bottom: 22),
+                    child: IconButton(
+                      icon: const Icon(Icons.calculate),
+                      color: Theme.of(context).colorScheme.primary,
+                      tooltip: S.current.battle_simulation_setup,
+                      onPressed: openBattleSimulation,
+                    ),
+                  ),
+                ),
                 Expanded(
                   child: TeamSetupCard(
                     formation: formation,
