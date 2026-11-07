@@ -23,7 +23,9 @@ import 'package:chaldea/utils/utils.dart';
 import 'package:chaldea/widgets/screenshot.dart';
 import 'package:chaldea/widgets/widgets.dart';
 
+import '../../bond/formation_bond_calc.dart';
 import '../../quest/quest_card.dart';
+import '../../quest/quest_list.dart';
 import '../formation/formation_card.dart';
 import 'fga_export.dart';
 import 'svt_detail.dart';
@@ -871,6 +873,23 @@ class BattleRecorderPanelBase extends StatelessWidget {
     );
   }
 
+  /// Total bond from the clear (servants, not the support; Team Bond settings) and bond per AP.
+  Widget _bondFooter(BuildContext context, QuestPhase quest, BattleTeamSetup team) {
+    final (total, perAp) = questClearBond(quest, team);
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Text(
+        [
+          '${S.current.total} ${S.current.bond} ${total.format(groupSeparator: ',', compact: false)}',
+          if (perAp != null) 'Per AP ${QuestListPage.formatEfficiency(perAp)}',
+        ].join('\n'),
+        textAlign: TextAlign.center,
+        style: TextStyle(color: Theme.of(context).colorScheme.primary),
+        textScaler: const TextScaler.linear(0.9),
+      ),
+    );
+  }
+
   Widget getTeam(BuildContext context, BattleTeamSetup team) {
     return Card(
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(8.0))),
@@ -879,7 +898,11 @@ class BattleRecorderPanelBase extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            FormationCard(formation: team.toFormationData(), showAllMysticCodeIcon: true),
+            FormationCard(
+              formation: team.toFormationData(),
+              showAllMysticCodeIcon: true,
+              mysticCodeFooter: quest == null ? null : _bondFooter(context, quest!, team),
+            ),
             // TeamSetupCard(
             //   onFieldSvts: team.onFieldSvtDataList,
             //   backupSvts: team.backupSvtDataList,

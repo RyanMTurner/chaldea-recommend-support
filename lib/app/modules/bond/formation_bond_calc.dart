@@ -292,3 +292,21 @@ extension FormationBondOptionCalc on FormationBondOption {
     return results;
   }
 }
+
+/// Bond from clearing [quest] with [formation]: the sum over its servants (not the support), with the user's
+/// Team Bond settings (teapot, event bonuses...) and no per-servant custom bonuses, and the bond per AP (null
+/// when the quest doesn't cost AP).
+(int total, double? perAp) questClearBond(QuestPhase quest, BattleTeamSetup formation) {
+  final option = db.curUser.formationBondOption.copy()
+    ..svtBonus = List.generate(_kMaxSvtNum, (_) => FormationBondSvtBonus())
+    ..validate(quest);
+  final results = option.calcResults(quest, formation);
+  int total = 0;
+  for (final (index, svt) in formation.svts.take(_kMaxSvtNum).indexed) {
+    if (svt.svt == null || svt.supportType.isSupport) continue;
+    total += results[index].totalBond;
+  }
+  final ap = db.gameData.questPhaseDetails[quest.id * 100 + quest.phase]?.actConsume ?? quest.consume;
+  final perAp = quest.consumeType.useAp && ap > 0 ? total / ap : null;
+  return (total, perAp);
+}

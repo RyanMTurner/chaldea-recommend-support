@@ -22,6 +22,9 @@ class FormationCard extends StatelessWidget {
   /// Optional replacement for the CE "Lv.x ★" label, by slot position (0-5). Return null to keep the default.
   final String? Function(int position, SvtEquipTarget equipTarget)? ceLabelBuilder;
 
+  /// Optional extra lines under the mystic code and team cost.
+  final Widget? mysticCodeFooter;
+
   const FormationCard({
     super.key,
     required this.formation,
@@ -32,6 +35,7 @@ class FormationCard extends StatelessWidget {
     this.maxSvtCount,
     this.questPhase,
     this.ceLabelBuilder,
+    this.mysticCodeFooter,
   });
 
   @override
@@ -267,6 +271,7 @@ class FormationCard extends StatelessWidget {
           style: TextStyle(color: Theme.of(context).textTheme.bodySmall?.color),
           textScaler: const TextScaler.linear(0.9),
         ),
+        ?mysticCodeFooter,
       ],
     );
     if (fadeOutMysticCode) {
