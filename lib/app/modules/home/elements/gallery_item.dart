@@ -139,7 +139,6 @@ class GalleryItem {
     npCharge,
     bondBonus,
     formationBond,
-    teamGenerator,
     statistics,
     if (!kIsWeb && AppInfo.isDebugOn) fakeGrandOrder,
     importData,
