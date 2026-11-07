@@ -159,6 +159,7 @@ SvtStatus _$SvtStatusFromJson(Map json) => $checkedCreate('SvtStatus', json, ($c
     cur: $checkedConvert('cur', (v) => v == null ? null : SvtPlan.fromJson(Map<String, dynamic>.from(v as Map))),
     priority: $checkedConvert('priority', (v) => (v as num?)?.toInt() ?? 1),
     bond: $checkedConvert('bond', (v) => (v as num?)?.toInt() ?? 0),
+    bondPoints: $checkedConvert('bondPoints', (v) => (v as num?)?.toInt()),
     equipCmdCodes: $checkedConvert(
       'equipCmdCodes',
       (v) => (v as List<dynamic>?)?.map((e) => (e as num?)?.toInt()).toList(),
@@ -176,6 +177,7 @@ Map<String, dynamic> _$SvtStatusToJson(SvtStatus instance) => <String, dynamic>{
   'cur': instance.cur.toJson(),
   'priority': instance.priority,
   'bond': instance.bond,
+  'bondPoints': instance.bondPoints,
   'equipCmdCodes': instance.equipCmdCodes,
   'cmdCardStrengthen': instance.cmdCardStrengthen,
   'grandSvt': instance.grandSvt,

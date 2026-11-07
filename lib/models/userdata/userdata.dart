@@ -347,6 +347,10 @@ class SvtStatus {
 
   /// current bond, 5.5=5
   int bond;
+
+  /// exact bond points earned in game (collection.friendship), saved by the https import.
+  /// null when unknown, e.g. the bond level was entered by hand.
+  int? bondPoints;
   List<int?> equipCmdCodes;
   // 0~25 -> 0~500
   List<int>? cmdCardStrengthen;
@@ -356,6 +360,7 @@ class SvtStatus {
     SvtPlan? cur,
     this.priority = 1,
     this.bond = 0,
+    this.bondPoints,
     List<int?>? equipCmdCodes,
     List<int>? cmdCardStrengthen,
     this.grandSvt = false,

@@ -901,6 +901,7 @@ class ImportHttpPageState extends State<ImportHttpPage> {
         status
           ..favorite = true
           ..bond = collection.friendshipRank
+          ..bondPoints = collection.friendship
           ..grandSvt = mstData?.userSvtGrand.any((e) => e.userSvtId == svt.id) == true;
         status.favorite = true;
         status.bond = collection.friendshipRank;
