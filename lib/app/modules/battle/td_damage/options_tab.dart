@@ -26,7 +26,10 @@ import 'model.dart';
 class TdDmgOptionsTab extends StatefulWidget {
   final TdDmgSolver solver;
   final VoidCallback onStart;
-  const TdDmgOptionsTab({super.key, required this.solver, required this.onStart});
+
+  /// "Propose NP Up": calculate, then again with NP levels below 5 raised by 1.
+  final VoidCallback? onProposeNpUp;
+  const TdDmgOptionsTab({super.key, required this.solver, required this.onStart, this.onProposeNpUp});
 
   @override
   State<TdDmgOptionsTab> createState() => _TdDmgOptionsTabState();
@@ -57,6 +60,14 @@ class _TdDmgOptionsTabState extends State<TdDmgOptionsTab> {
                 builder: (context, value, child) =>
                     FilledButton(onPressed: value ? null : widget.onStart, child: Text(S.current.calculate)),
               ),
+              if (widget.onProposeNpUp != null)
+                ValueListenableBuilder(
+                  valueListenable: widget.solver.running,
+                  builder: (context, value, child) => FilledButton.tonal(
+                    onPressed: value ? null : widget.onProposeNpUp,
+                    child: const Text('Propose NP Up'),
+                  ),
+                ),
             ],
           ),
         ),

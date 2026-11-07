@@ -62,6 +62,14 @@ class _TdDamageRankingState extends State<TdDamageRanking> with SingleTickerProv
                 });
               }
             },
+            onProposeNpUp: () async {
+              await solver.calculateNpUp();
+              if (mounted) {
+                setState(() {
+                  _tabController.index = 1;
+                });
+              }
+            },
           ),
           TdDmgRankingTab(
             solver: solver,

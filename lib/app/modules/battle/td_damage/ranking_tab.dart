@@ -121,6 +121,18 @@ class _TdDmgRankingTabState extends State<TdDmgRankingTab> {
       case _SortType.id:
         results.sort2((e) => e.svt.collectionNo);
         break;
+      case _SortType.npUp:
+        // biggest NP up gain first; like Damage until "Propose NP Up" has been run
+        results.sortByList(
+          (e) => [
+            if (widget.solver.npUpCalculated) -e.npUpGain,
+            e.hasInstantDeathSuccess ? 0 : 1,
+            -e.totalDamage,
+            -e.attackNp,
+            -e.totalNp,
+          ],
+        );
+        break;
     }
     return ListView.separated(
       controller: scrollController,
@@ -195,6 +207,17 @@ class _TdDmgRankingTabState extends State<TdDmgRankingTab> {
         textScaler: const TextScaler.linear(0.9),
       ),
     );
+    // "Propose NP Up": what one more NP level adds, only for servants it changes
+    final npUpGain = result.npUpGain;
+    Widget? npUpColumn;
+    if (npUpGain > 0) {
+      final percent = result.totalDamage > 0 ? npUpGain / result.totalDamage * 100 : 0.0;
+      npUpColumn = Text(
+        '+${npUpGain.format(groupSeparator: ",", compact: false)}\n+${percent.toStringAsFixed(1)}%',
+        textAlign: TextAlign.end,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.primary),
+      );
+    }
     return ListTile(
       dense: true,
       leading: Row(
@@ -213,11 +236,17 @@ class _TdDmgRankingTabState extends State<TdDmgRankingTab> {
       title: Text(dmgStr),
       subtitle: Padding(padding: const EdgeInsets.only(bottom: 8), child: Text(npStr)),
       contentPadding: const EdgeInsetsDirectional.only(start: 12),
-      trailing: Wrap(
-        alignment: WrapAlignment.end,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        spacing: 4,
-        children: cardIcons,
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (npUpColumn != null) ...[npUpColumn, const SizedBox(width: 16)],
+          Wrap(
+            alignment: WrapAlignment.end,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 4,
+            children: cardIcons,
+          ),
+        ],
       ),
     );
   }
@@ -1120,7 +1149,8 @@ enum _SortType {
   damage,
   attackNp,
   totalNp,
-  id;
+  id,
+  npUp;
 
   bool get isNp => this == _SortType.attackNp || this == _SortType.totalNp;
 
@@ -1134,6 +1164,8 @@ enum _SortType {
         return S.current.total_np;
       case _SortType.id:
         return 'ID';
+      case _SortType.npUp:
+        return 'NP Up Difference';
     }
   }
 }

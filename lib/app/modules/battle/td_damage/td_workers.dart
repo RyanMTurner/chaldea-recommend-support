@@ -24,12 +24,16 @@ class TdWorkPayload {
   final PlayerSvtData? target;
   final bool includeNoCe;
 
+  /// "Propose NP Up": NP levels below 5 raised by 1.
+  final bool npUp;
+
   const TdWorkPayload({
     required this.options,
     required this.userData,
     required this.ids,
     this.target,
     this.includeNoCe = false,
+    this.npUp = false,
   });
 }
 
@@ -49,7 +53,14 @@ List<List<int>> splitIds(List<int> ids, int parts) {
 Future<BattleWorkerPool> _pool(TdDmgSolver solver) => BattleWorkerPool.obtain(kTdWorkerTag, solver.workerCount);
 
 TdWorkPayload _payload(TdDmgSolver solver, List<int> ids, {PlayerSvtData? target, bool includeNoCe = false}) =>
-    TdWorkPayload(options: solver.options, userData: db.userData, ids: ids, target: target, includeNoCe: includeNoCe);
+    TdWorkPayload(
+      options: solver.options,
+      userData: db.userData,
+      ids: ids,
+      target: target,
+      includeNoCe: includeNoCe,
+      npUp: solver.npUp,
+    );
 
 void Function(int worker, Object? progress) _progressSum(int parts, int total) {
   final done = List<int>.filled(parts, 0);
@@ -66,7 +77,7 @@ void Function(int worker, Object? progress) _progressSum(int parts, int total) {
 Future<Object?> _rankingTask(Object? payload, void Function(Object? progress) report) async {
   final work = payload as TdWorkPayload;
   _applyContext(work);
-  final solver = TdDmgSolver();
+  final solver = TdDmgSolver()..npUp = work.npUp;
   final servants = work.ids.map((id) => db.gameData.servantsById[id]).whereType<Servant>().toList();
   await solver.calculateServants(servants, onProgress: (done, _) => report(done));
   for (final result in solver.results) {

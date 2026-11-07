@@ -35,6 +35,12 @@ class TdDmgResult {
   int attackNp = 0;
   int totalNp = 0;
 
+  /// "Propose NP Up": damage with the NP level raised by 1 (only below NP5, after [TdDmgSolver.calculateNpUp]).
+  int? npUpDamage;
+
+  /// Damage gained by the NP level up, if any.
+  int get npUpGain => npUpDamage == null ? 0 : max(0, npUpDamage! - totalDamage);
+
   // Best Supports ranking, lazily calculated on demand
   int? supportBaseDamage;
   List<TdSupportGain>? supportGains;
@@ -123,10 +129,18 @@ class TdDmgSolver {
   List errors = [];
 
   final running = ValueNotifier<bool>(false);
+
+  /// Raise every NP level below 5 by 1 (the second calculation of [calculateNpUp]).
+  bool npUp = false;
+
+  /// The current results come from [calculateNpUp]: they have [TdDmgResult.npUpDamage].
+  bool npUpCalculated = false;
+
   Future<void> calculate() async {
     if (running.value) return;
     try {
       running.value = true;
+      npUpCalculated = false;
       // let button update
       // await Future.delayed(const Duration(milliseconds: 200));
       await EasyThrottle.throttleAsync('td_dmg_calculate', _calculate);
@@ -138,6 +152,48 @@ class TdDmgSolver {
       running.value = false;
     }
   }
+
+  /// "Propose NP Up": calculates the damage list, then again with every NP level below 5 raised by 1. The
+  /// results are the normal ones, each with its [TdDmgResult.npUpDamage].
+  Future<void> calculateNpUp() async {
+    if (running.value) return;
+    try {
+      running.value = true;
+      await EasyThrottle.throttleAsync('td_dmg_calculate_np_up', () async {
+        npUpCalculated = false;
+        await _calculate();
+        final base = List.of(results);
+        final baseErrors = List.of(errors);
+        npUp = true;
+        try {
+          await _calculate();
+        } finally {
+          npUp = false;
+        }
+        final raised = {for (final result in results) npUpKey(result): result.totalDamage};
+        results
+          ..clear()
+          ..addAll(base);
+        errors
+          ..clear()
+          ..addAll(baseErrors);
+        for (final result in results) {
+          if (result.originalSvtData.tdLv < 5) result.npUpDamage = raised[npUpKey(result)];
+        }
+        npUpCalculated = true;
+      });
+      await EasyLoading.dismiss();
+    } catch (e, s) {
+      tryEasyLoading(() => EasyLoading.showError(e.toString()));
+      logger.e('calc NP up ranking failed', e, s);
+    } finally {
+      running.value = false;
+    }
+  }
+
+  /// Matches a result with its NP up counterpart (same servant, ascension and NP; only the NP level differs).
+  static String npUpKey(TdDmgResult result) =>
+      '${result.svt.id}:${result.originalSvtData.limitCount}:${result.originalSvtData.td?.id}';
 
   /// Worker isolates to use (the "CPU Cores" option); 0 = calculate on the UI thread.
   int get workerCount => kIsWeb ? 0 : max(0, options.cores);
@@ -778,6 +834,7 @@ class TdDmgSolver {
         limitCount: limitCount,
       );
     }
+    if (npUp && data.tdLv < 5) data.tdLv += 1;
     data.grandSvt = options.grandSvt.isGrand(svt);
     if (data.grandSvt && !options.grandBoard.isNone) {
       if (options.equip2Type != BondEquipType.none) {
