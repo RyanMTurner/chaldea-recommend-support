@@ -126,7 +126,13 @@ class _Database {
   }
 
   // methods
+  /// Only the app's own startup ([initiate]) may write the user data and settings files. Test processes
+  /// ([initiateForTest]) and worker isolates also point [paths] at the real data folder, but they hold their own
+  /// copies of the data (a blank account in tests), which must never overwrite the user's files.
+  bool _persistenceEnabled = false;
+
   Future<void> initiate() async {
+    _persistenceEnabled = true;
     itemCenter.init();
     await paths.initRootPath();
 
@@ -239,13 +245,15 @@ class _Database {
     await saveSettings();
   }
 
-  Future<void> saveUserData() {
+  Future<void> saveUserData() async {
     _userdataDirty = false;
+    if (!_persistenceEnabled) return;
     return _saveWithBak(paths.userDataPath, userData, 'db.userdata');
   }
 
-  Future<void> saveSettings() {
+  Future<void> saveSettings() async {
     _settingsDirty = false;
+    if (!_persistenceEnabled) return;
     return _saveWithBak(paths.settingsPath, settings, 'db.settings');
   }
 

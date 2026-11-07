@@ -34,7 +34,8 @@ void main() async {
         ..setCmdCode(2, cc.collectionNo)
         ..setCmdCode(4, cc.collectionNo); // twice on one servant still counts once
       svts[2].status
-        ..favorite = false // not owned -> not counted
+        ..favorite =
+            false // not owned -> not counted
         ..setCmdCode(1, cc.collectionNo);
       expect(CmdCodeFilterData.attachedServantCount(cc.collectionNo), 2);
     } finally {

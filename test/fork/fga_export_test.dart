@@ -107,9 +107,7 @@ void main() async {
       return;
     }
     final data = PlayerSvtData.id(kukulkan.id);
-    final skillIndex = [0, 1, 2].firstWhereOrNull(
-      (i) => data.skills[i]?.script?.SelectAddInfo?.isNotEmpty == true,
-    );
+    final skillIndex = [0, 1, 2].firstWhereOrNull((i) => data.skills[i]?.script?.SelectAddInfo?.isNotEmpty == true);
     expect(skillIndex, isNotNull, reason: 'Kukulkan should have a skill with options');
     final skill = data.skills[skillIndex!]!;
     final btnCount = skill.script!.SelectAddInfo![data.skillLvs[skillIndex] - 1].btn.length;

@@ -18,8 +18,7 @@ void main() async {
   final altria = db.gameData.servantsById[kAltria]!;
   final coinId = altria.coin!.item.id;
 
-  SvtFilterData appendAvailableFilter() =>
-      SvtFilterData()..curStatus.options = {SvtStatusState.appendAvailable};
+  SvtFilterData appendAvailableFilter() => SvtFilterData()..curStatus.options = {SvtStatusState.appendAvailable};
 
   bool matches(Servant svt) => ServantFilterPage.filter(appendAvailableFilter(), svt);
 
@@ -102,8 +101,7 @@ void main() async {
 
   test('combines with other options in the same row (match any)', () {
     setState(coins: 0, unlockedAppends: 0); // not append-available
-    final filter = SvtFilterData()
-      ..curStatus.options = {SvtStatusState.appendAvailable, SvtStatusState.appendTwo8};
+    final filter = SvtFilterData()..curStatus.options = {SvtStatusState.appendAvailable, SvtStatusState.appendTwo8};
     expect(ServantFilterPage.filter(filter, altria), isTrue, reason: 'Append 2 < 9 matches');
   });
 }
