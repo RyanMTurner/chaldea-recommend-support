@@ -306,7 +306,42 @@ extension FormationBondOptionCalc on FormationBondOption {
     if (svt.svt == null || svt.supportType.isSupport) continue;
     total += results[index].totalBond;
   }
-  final ap = db.gameData.questPhaseDetails[quest.id * 100 + quest.phase]?.actConsume ?? quest.consume;
-  final perAp = quest.consumeType.useAp && ap > 0 ? total / ap : null;
+  final ap = questApCost(quest) ?? 0;
+  final perAp = ap > 0 ? total / ap : null;
   return (total, perAp);
+}
+
+/// Bond level the "Runs To Bond 10" / "Apples" rows on the Team Bond page aim for.
+const int kRunsTargetBondLv = 10;
+
+/// Bond points still needed to reach [targetLv].
+///
+/// [bondGrowth] is the servant's cumulative bond table (`bondGrowth[lv - 1]` = total points for bond lv).
+/// The current points are [bondPoints] when known, otherwise the lowest total for [bondLv].
+/// Returns 0 once the target is reached, and also when the table doesn't reach [targetLv].
+int bondPointsToLv(List<int> bondGrowth, {required int bondLv, int? bondPoints, int targetLv = kRunsTargetBondLv}) {
+  final target = bondGrowth.getOrNull(targetLv - 1);
+  if (target == null) return 0;
+  final current = bondPoints ?? (bondLv <= 0 ? 0 : bondGrowth.getOrNull(bondLv - 1) ?? 0);
+  return max(0, target - current);
+}
+
+/// Quest runs needed to earn [remaining] bond at [bondPerRun] each (rounded up).
+/// null when the quest gives no bond but some is still needed.
+int? runsToBond(int remaining, int bondPerRun) {
+  if (remaining <= 0) return 0;
+  if (bondPerRun <= 0) return null;
+  return (remaining + bondPerRun - 1) ~/ bondPerRun;
+}
+
+/// Apples for [runs] runs at [apCost] AP each: total AP / [maxAp]. null when [maxAp] isn't positive.
+double? applesForRuns(int runs, int apCost, int maxAp) {
+  if (maxAp <= 0) return null;
+  return runs * apCost / maxAp;
+}
+
+/// AP cost of one run of [quest], or null when it doesn't cost AP.
+int? questApCost(QuestPhase quest) {
+  if (!quest.consumeType.useAp) return null;
+  return db.gameData.questPhaseDetails[quest.id * 100 + quest.phase]?.actConsume ?? quest.consume;
 }

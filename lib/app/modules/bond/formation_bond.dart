@@ -461,24 +461,24 @@ class _FormationBondPageState extends State<FormationBondPage> with SingleTicker
         TileGroup(
           header: '${S.current.general_custom} / ${S.current.bond} 15 / ${S.current.bond_limit}',
           children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              child: Row(
-                children: [
-                  for (final index in range(option.svtBonus.length))
-                    Expanded(child: Center(child: buildExtraBonus(index))),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              child: Row(
-                children: [
-                  for (final index in range(results.length))
-                    Expanded(child: Center(child: buildResult(index, results[index]))),
-                ],
-              ),
-            ),
+            _bondTableRow(null, [
+              for (final index in range(option.svtBonus.length)) buildExtraBonus(index),
+            ]),
+            _bondTableRow(null, [
+              for (final index in range(results.length)) buildResult(index, results[index]),
+            ]),
+            _bondTableRow('Runs To Bond $kRunsTargetBondLv', [
+              for (final index in range(results.length))
+                _buildRunsCell(index, results[index], (runs) => runs.toString()),
+            ]),
+            _bondTableRow('Apples', [
+              for (final index in range(results.length))
+                _buildRunsCell(index, results[index], (runs) {
+                  final ap = quest == null ? null : questApCost(quest);
+                  final apples = ap == null ? null : applesForRuns(runs, ap, option.maxAp);
+                  return apples?.toStringAsFixed(1) ?? '-';
+                }),
+            ]),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Text.rich(
@@ -715,6 +715,24 @@ class _FormationBondPageState extends State<FormationBondPage> with SingleTicker
           ),
           ListTile(
             dense: true,
+            title: const Text('MAX AP'),
+            trailing: TextButton(
+              onPressed: () => InputCancelOkDialog.number(
+                title: 'MAX AP',
+                initValue: option.maxAp,
+                validate: (v) => v > 0,
+                onSubmit: (v) {
+                  if (!mounted) return;
+                  // Only affects the Apples row, not the solver: keep any results.
+                  setState(() => option.maxAp = v);
+                  if (_runtime.userBacked) db.notifyUserdata();
+                },
+              ).showDialog(context),
+              child: Text('${option.maxAp}'),
+            ),
+          ),
+          ListTile(
+            dense: true,
             title: Text(S.current.bond_max_servants),
             trailing: DropdownButton<int>(
               value: option.maxServants.clamp(1, 6),
@@ -824,6 +842,49 @@ class _FormationBondPageState extends State<FormationBondPage> with SingleTicker
         onRemove: (id) => updateSharedInput(() => option.excludedCes.remove(id)),
       ),
     ];
+  }
+
+  static const double _bondTableLabelWidth = 56;
+
+  /// One row of the per-servant bond table, with a label column on the left so all rows stay aligned.
+  Widget _bondTableRow(String? label, List<Widget> cells) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      child: Row(
+        children: [
+          SizedBox(
+            width: _bondTableLabelWidth,
+            child: label == null
+                ? null
+                : Text(label, style: Theme.of(context).textTheme.bodySmall, textAlign: TextAlign.start),
+          ),
+          for (final cell in cells) Expanded(child: Center(child: cell)),
+        ],
+      ),
+    );
+  }
+
+  /// Runs To Bond 10 for the servant at [index]: points from their saved bond points (or the lowest total for
+  /// their bond level) up to bond 10, divided by the bond this quest gives them per run ([result]).
+  int? _runsToBond10(int index, SvtBondBonusResult result) {
+    final svt = formation.svts.getOrNull(index)?.svt;
+    if (svt == null) return null;
+    final status = _user.servants[svt.collectionNo];
+    final remaining = bondPointsToLv(
+      svt.bondGrowth,
+      bondLv: status?.bond ?? 0,
+      bondPoints: status?.bondPoints,
+    );
+    return runsToBond(remaining, result.totalBond);
+  }
+
+  Widget _buildRunsCell(int index, SvtBondBonusResult result, String Function(int runs) format) {
+    final deckSvt = formation.svts.getOrNull(index);
+    if (deckSvt == null || deckSvt.svt == null) return const SizedBox.shrink();
+    final style = Theme.of(context).textTheme.bodySmall;
+    if (deckSvt.supportType.isSupport) return Text('-', style: style);
+    final runs = _runsToBond10(index, result);
+    return AutoSizeText(runs == null ? '-' : format(runs), maxLines: 1, maxFontSize: 16, minFontSize: 2);
   }
 
   Widget buildExtraBonus(int index) {

@@ -850,6 +850,7 @@ FormationBondOption _$FormationBondOptionFromJson(Map json) => $checkedCreate('F
     frontlineBonus: $checkedConvert('frontlineBonus', (v) => v as bool? ?? true),
     teapotTimes: $checkedConvert('teapotTimes', (v) => (v as num?)?.toInt() ?? 1),
     maxCost: $checkedConvert('maxCost', (v) => (v as num?)?.toInt()),
+    maxAp: $checkedConvert('maxAp', (v) => (v as num?)?.toInt() ?? 152),
     favoriteSvtOnly: $checkedConvert('favoriteSvtOnly', (v) => v as bool? ?? true),
     favoriteSvtEquipOnly: $checkedConvert('favoriteSvtEquipOnly', (v) => v as bool? ?? true),
     releaseReference: $checkedConvert(
@@ -877,6 +878,7 @@ Map<String, dynamic> _$FormationBondOptionToJson(FormationBondOption instance) =
   'frontlineBonus': instance.frontlineBonus,
   'teapotTimes': instance.teapotTimes,
   'maxCost': instance.maxCost,
+  'maxAp': instance.maxAp,
   'favoriteSvtOnly': instance.favoriteSvtOnly,
   'favoriteSvtEquipOnly': instance.favoriteSvtEquipOnly,
   'releaseReference': _$BondReleaseReferenceEnumMap[instance.releaseReference]!,

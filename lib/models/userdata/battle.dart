@@ -1501,6 +1501,9 @@ class FormationBondOption {
   bool frontlineBonus;
   int teapotTimes;
   int? maxCost;
+
+  /// The user's max AP, used to turn AP into apples (1 apple = a full AP refill).
+  int maxAp;
   bool favoriteSvtOnly;
   bool favoriteSvtEquipOnly;
   BondReleaseReference releaseReference;
@@ -1524,6 +1527,7 @@ class FormationBondOption {
     this.frontlineBonus = true,
     this.teapotTimes = 1,
     this.maxCost,
+    this.maxAp = 152,
     this.favoriteSvtOnly = true,
     this.favoriteSvtEquipOnly = true,
     this.releaseReference = BondReleaseReference.jp,
@@ -1566,6 +1570,7 @@ class FormationBondOption {
       frontlineBonus: frontlineBonus,
       teapotTimes: teapotTimes,
       maxCost: maxCost,
+      maxAp: maxAp,
       favoriteSvtOnly: favoriteSvtOnly,
       favoriteSvtEquipOnly: favoriteSvtEquipOnly,
       releaseReference: releaseReference,
