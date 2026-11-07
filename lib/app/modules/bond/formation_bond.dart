@@ -433,14 +433,22 @@ class _FormationBondPageState extends State<FormationBondPage> with SingleTicker
           header: S.current.team,
           padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
           children: [
-            TeamSetupCard(
-              formation: formation,
-              quest: quest,
-              playerRegion: Region.jp,
-              playerSvtSource: option.favoriteSvtOnly
-                  ? PreferPlayerSvtDataSource.current
-                  : PreferPlayerSvtDataSource.none,
-              onChanged: () => updateSharedInput(() {}),
+            Row(
+              children: [
+                // Matches the bond table's label column so servants line up with their columns.
+                const SizedBox(width: _bondTableLabelWidth),
+                Expanded(
+                  child: TeamSetupCard(
+                    formation: formation,
+                    quest: quest,
+                    playerRegion: Region.jp,
+                    playerSvtSource: option.favoriteSvtOnly
+                        ? PreferPlayerSvtDataSource.current
+                        : PreferPlayerSvtDataSource.none,
+                    onChanged: () => updateSharedInput(() {}),
+                  ),
+                ),
+              ],
             ),
             Center(
               child: Wrap(
