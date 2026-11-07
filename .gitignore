@@ -366,3 +366,8 @@ Temporary Items
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
+
+# local test runs (test_windows_log.bat)
+/test_output.log
+/test_target.txt
+/test_trace.log

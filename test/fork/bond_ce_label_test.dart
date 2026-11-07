@@ -79,12 +79,7 @@ void main() {
       equip1Candidates: const [],
       equip3Candidates: const [],
     );
-    final team = BondSolvedTeam(0, 0, [
-      slot(0, ce: partyCe),
-      slot(1, ce: selfCe),
-      slot(2, support: true),
-      slot(3),
-    ]);
+    final team = BondSolvedTeam(0, 0, [slot(0, ce: partyCe), slot(1, ce: selfCe), slot(2, support: true), slot(3)]);
 
     final tab = BondSolverResultsTab(
       solved: null,
@@ -97,10 +92,7 @@ void main() {
     );
 
     final contributions = tab.ceBondContributions(team);
-    expect(contributions.keys.toSet(), {
-      (0, SvtEquipTarget.normal),
-      if (selfCe != null) (1, SvtEquipTarget.normal),
-    });
+    expect(contributions.keys.toSet(), {(0, SvtEquipTarget.normal), if (selfCe != null) (1, SvtEquipTarget.normal)});
 
     final (partyBond, partyCount) = contributions[(0, SvtEquipTarget.normal)]!;
     expect(partyCount, 3, reason: 'positions 0, 1, 3; the support at 2 earns no bond');

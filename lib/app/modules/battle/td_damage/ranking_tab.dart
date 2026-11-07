@@ -377,10 +377,7 @@ class _ResultDetailState extends State<_ResultDetail> {
             },
             child: Text(S.current.details),
           ),
-          TextButton(
-            onPressed: () => openInBattleSim(widget.solver, widget.result),
-            child: const Text('Battle Sim'),
-          ),
+          TextButton(onPressed: () => openInBattleSim(widget.solver, widget.result), child: const Text('Battle Sim')),
         ],
       ),
     );
@@ -549,11 +546,7 @@ class _BestSupportsViewState extends State<_BestSupportsView> {
             children: [
               Tooltip(
                 message: 'Own NP damage (from the damage list)',
-                child: Text(
-                  ownNpText(gain.support),
-                  textAlign: TextAlign.end,
-                  style: theme.textTheme.bodySmall,
-                ),
+                child: Text(ownNpText(gain.support), textAlign: TextAlign.end, style: theme.textTheme.bodySmall),
               ),
               const SizedBox(width: 16),
               Text(
@@ -1084,10 +1077,7 @@ BattleTeamFormation buildBattleSimFormation(TdDmgSolver solver, TdDmgResult resu
     svts.add(PlayerSvtData.base()..onSelectServant(svt, region: region));
   }
 
-  final formation = current
-    ..svts = [
-      for (int index = 0; index < 6; index++) svts.getOrNull(index)?.toStoredData(),
-    ];
+  final formation = current..svts = [for (int index = 0; index < 6; index++) svts.getOrNull(index)?.toStoredData()];
   final mc = db.gameData.mysticCodes[options.mcId];
   if (mc != null) {
     formation.mysticCode = MysticCodeSaveData(mysticCodeId: mc.id, level: options.mcLv);

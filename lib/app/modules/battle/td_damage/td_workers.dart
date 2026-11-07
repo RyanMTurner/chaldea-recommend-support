@@ -42,21 +42,14 @@ void _applyContext(TdWorkPayload payload) {
 List<List<int>> splitIds(List<int> ids, int parts) {
   final count = max(1, min(parts, ids.length));
   return [
-    for (int part = 0; part < count; part++)
-      [for (int index = part; index < ids.length; index += count) ids[index]],
+    for (int part = 0; part < count; part++) [for (int index = part; index < ids.length; index += count) ids[index]],
   ];
 }
 
 Future<BattleWorkerPool> _pool(TdDmgSolver solver) => BattleWorkerPool.obtain(kTdWorkerTag, solver.workerCount);
 
 TdWorkPayload _payload(TdDmgSolver solver, List<int> ids, {PlayerSvtData? target, bool includeNoCe = false}) =>
-    TdWorkPayload(
-      options: solver.options,
-      userData: db.userData,
-      ids: ids,
-      target: target,
-      includeNoCe: includeNoCe,
-    );
+    TdWorkPayload(options: solver.options, userData: db.userData, ids: ids, target: target, includeNoCe: includeNoCe);
 
 void Function(int worker, Object? progress) _progressSum(int parts, int total) {
   final done = List<int>.filled(parts, 0);

@@ -20,21 +20,8 @@ void main() async {
       db.curUser.svtStatusOf(svts[1].collectionNo).bond = 12;
       db.curUser.svtStatusOf(svts[2].collectionNo).bond = 9;
 
-      expect(
-        TeamFilterData.countBond10Plus([
-          SvtSaveData(svtId: svts[0].id),
-          SvtSaveData(svtId: svts[2].id),
-          null,
-        ]),
-        1,
-      );
-      expect(
-        TeamFilterData.countBond10Plus([
-          SvtSaveData(svtId: svts[0].id),
-          SvtSaveData(svtId: svts[1].id),
-        ]),
-        2,
-      );
+      expect(TeamFilterData.countBond10Plus([SvtSaveData(svtId: svts[0].id), SvtSaveData(svtId: svts[2].id), null]), 1);
+      expect(TeamFilterData.countBond10Plus([SvtSaveData(svtId: svts[0].id), SvtSaveData(svtId: svts[1].id)]), 2);
       // the team's support may be the player's own servant
       expect(
         TeamFilterData.countBond10Plus([
