@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:auto_size_text/auto_size_text.dart';
+import 'package:flutter_easyloading/flutter_easyloading.dart';
 
 import 'package:chaldea/app/app.dart';
 import 'package:chaldea/app/battle/models/user.dart';
@@ -11,6 +12,7 @@ import 'package:chaldea/widgets/widgets.dart';
 
 import '../../battle/formation/formation_card.dart';
 import '../../common/builders.dart';
+import '../../servant/servant_list.dart';
 import '../formation_bond_calc.dart';
 import 'solver.dart';
 
@@ -315,10 +317,22 @@ class BondSolverResultsTab extends StatelessWidget {
       children: [
         if (teamIndex == 0 || team.totalBond != teams[teamIndex - 1].totalBond)
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-            child: Text(
-              '$score ${S.current.bond} · score group',
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(color: Theme.of(context).colorScheme.primary),
+            padding: const EdgeInsets.fromLTRB(16, 4, 4, 0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '$score ${S.current.bond} · score group',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.titleSmall?.copyWith(color: Theme.of(context).colorScheme.primary),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => _showUniqueCandidates(teams, teamIndex, score),
+                  child: const Text('Unique Candidates'),
+                ),
+              ],
             ),
           ),
         Card(
@@ -354,6 +368,43 @@ class BondSolverResultsTab extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+
+  /// Servants (not supports) on any team in the score group starting at [groupStart], including each slot's
+  /// equally good alternatives, that the user's manual team input doesn't already have.
+  @visibleForTesting
+  Set<int> uniqueCandidateIds(List<BondSolvedTeam> teams, int groupStart) {
+    final groupBond = teams[groupStart].totalBond;
+    final manual = {
+      for (final deck in formation.svts)
+        if (deck.svt != null) deck.svt!.id,
+    };
+    return {
+      for (final team in teams.skip(groupStart).takeWhile((team) => team.totalBond == groupBond))
+        for (final slot in team.slots)
+          if (!slot.isSupport)
+            for (final id in [?slot.servantId, ...slot.servantCandidates])
+              if (!manual.contains(id)) id,
+    };
+  }
+
+  void _showUniqueCandidates(List<BondSolvedTeam> teams, int groupStart, int score) {
+    final ids = uniqueCandidateIds(teams, groupStart);
+    if (ids.isEmpty) {
+      EasyLoading.showInfo('Every servant in this score group is already in your team');
+      return;
+    }
+    router.pushPage(
+      ServantListPage(
+        title: 'Unique Candidates · $score',
+        onlySvtIds: ids,
+        // A fresh filter so saved filters (favorite, class...) don't hide any candidate.
+        filterData: SvtFilterData(useGrid: true),
+      ),
+      detail: true,
+      // Replace an already-open candidate list instead of stacking another.
+      popDetail: true,
     );
   }
 

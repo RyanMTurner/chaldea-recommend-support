@@ -29,6 +29,12 @@ class ServantListPage extends StatefulWidget {
   final bool showSecondaryFilter;
   final int? eventId;
 
+  /// When set, only these servants (by id) are listed.
+  final Set<int>? onlySvtIds;
+
+  /// Replaces the default "Servant" title.
+  final String? title;
+
   ServantListPage({
     super.key,
     this.planMode = false,
@@ -37,6 +43,8 @@ class ServantListPage extends StatefulWidget {
     this.pinged,
     this.showSecondaryFilter = false,
     this.eventId,
+    this.onlySvtIds,
+    this.title,
   });
 
   @override
@@ -46,6 +54,10 @@ class ServantListPage extends StatefulWidget {
 class ServantListPageState extends State<ServantListPage> with SearchableListState<Servant, ServantListPage> {
   @override
   Iterable<Servant> get wholeData {
+    final onlySvtIds = widget.onlySvtIds;
+    if (onlySvtIds != null) {
+      return db.gameData.servantsById.values.where((e) => onlySvtIds.contains(e.id));
+    }
     if (db.settings.filters.hideUnreleasedEnemyCollection || widget.planMode) {
       return db.gameData.servantsWithDup.values.where((e) => e.type != SvtType.enemyCollectionDetail);
     } else {
@@ -111,7 +123,7 @@ class ServantListPageState extends State<ServantListPage> with SearchableListSta
   PreferredSizeWidget? get appBar {
     Widget title = db.onUserData(
       (context, snapshot) => AutoSizeText(
-        widget.planMode ? db.curUser.getFriendlyPlanName() : S.current.servant,
+        widget.planMode ? db.curUser.getFriendlyPlanName() : widget.title ?? S.current.servant,
         maxLines: 1,
         minFontSize: 12,
         // maxFontSize: 18,
