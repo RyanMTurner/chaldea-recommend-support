@@ -58,8 +58,10 @@ void main() async {
 
     Set<int> added(Set<int> rarities) {
       final result = FormationBondSolver.solve(option: options(rarities), quest: quest, formation: BattleTeamSetup());
-      return {for (final slot in result.best?.slots ?? const <BondSolvedSlot>[]) slot.servantId}
-        ..removeWhere((id) => id == null || id == 0);
+      return {
+        for (final slot in result.best?.slots ?? const <BondSolvedSlot>[])
+          if ((slot.servantId ?? 0) != 0) slot.servantId!,
+      };
     }
 
     expect(added({3}), {three.id});
