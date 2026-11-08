@@ -280,14 +280,19 @@ class _ResultDetailState extends State<_ResultDetail> {
 
   @override
   Widget build(BuildContext context) {
-    final tab = _tab ?? widget.tab ?? _ParamType.damage;
+    final tabOptions = _ParamType.values.where((e) {
+      if (e == _ParamType.instantDeath) return widget.result.hasInstantDeath;
+      // only below Lv.100
+      if (e == _ParamType.grailed) return widget.result.originalSvtData.lv < 100;
+      return true;
+    }).toList();
+    var tab = _tab ?? widget.tab ?? _ParamType.damage;
+    if (!tabOptions.contains(tab)) tab = _ParamType.damage;
 
     List<Widget> children = [
       FilterGroup<_ParamType>(
         combined: true,
-        options: widget.result.hasInstantDeath
-            ? _ParamType.values
-            : (_ParamType.values.toList()..remove(_ParamType.instantDeath)),
+        options: tabOptions,
         values: FilterRadioData.nonnull(tab),
         optionBuilder: (v) => Text(v.shownName),
         onFilterChanged: (v, _) {
@@ -334,6 +339,12 @@ class _ResultDetailState extends State<_ResultDetail> {
       );
       return Column(mainAxisSize: MainAxisSize.min, children: children);
     }
+    if (tab == _ParamType.grailed) {
+      children.add(
+        _IfGrailedView(key: Key('IfGrailed_${widget.result.hashCode}'), solver: widget.solver, result: widget.result),
+      );
+      return Column(mainAxisSize: MainAxisSize.min, children: children);
+    }
 
     for (final attack in widget.result.attacks) {
       Widget? paramsCard;
@@ -375,6 +386,7 @@ class _ResultDetailState extends State<_ResultDetail> {
           case _ParamType.bestSupports:
           case _ParamType.bestCE:
           case _ParamType.bestMC:
+          case _ParamType.grailed:
             break;
         }
       } else if (attack is BattleInstantDeathRecord) {
@@ -1071,6 +1083,100 @@ class _BestMcViewState extends State<_BestMcView> {
   }
 }
 
+class _IfGrailedView extends StatefulWidget {
+  final TdDmgSolver solver;
+  final TdDmgResult result;
+  const _IfGrailedView({super.key, required this.solver, required this.result});
+
+  @override
+  State<_IfGrailedView> createState() => _IfGrailedViewState();
+}
+
+class _IfGrailedViewState extends State<_IfGrailedView> {
+  bool _calculating = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.result.grailGains == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _calculate());
+    }
+  }
+
+  Future<void> _calculate() async {
+    if (_calculating || widget.solver.running.value) return;
+    setState(() => _calculating = true);
+    await widget.solver.calcGrailLevels(widget.result);
+    if (mounted) setState(() => _calculating = false);
+  }
+
+  String _fmt(int v) => v.format(groupSeparator: ",", compact: false);
+
+  @override
+  Widget build(BuildContext context) {
+    final gains = widget.result.grailGains;
+    if (_calculating) {
+      return const Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator());
+    }
+    if (gains == null) {
+      return Padding(
+        padding: const EdgeInsets.all(8),
+        child: FilledButton(onPressed: _calculate, child: const Text('Calculate If Grailed')),
+      );
+    }
+    final theme = Theme.of(context);
+    final result = widget.result;
+    final baseDamage = result.grailBaseDamage ?? result.totalDamage;
+
+    List<Widget> children = [
+      ListTile(
+        dense: true,
+        title: Text('Baseline ${S.current.damage}: ${_fmt(baseDamage)}'),
+        subtitle: Text('Current level: Lv.${result.originalSvtData.lv}. Damage if grailed to each level.'),
+        trailing: IconButton(tooltip: 'Recalculate', onPressed: _calculate, icon: const Icon(Icons.refresh)),
+      ),
+    ];
+    for (final gain in gains) {
+      final percent = baseDamage > 0 ? gain.gain / baseDamage * 100 : 0.0;
+      final sign = gain.gain >= 0 ? '+' : '';
+      final color = gain.gain > 0
+          ? theme.colorScheme.primary
+          : gain.gain < 0
+          ? theme.colorScheme.error
+          : theme.disabledColor;
+      children.add(
+        ListTile(
+          dense: true,
+          contentPadding: const EdgeInsetsDirectional.only(start: 12, end: 16),
+          title: Text('Lv.${gain.lv}'),
+          subtitle: Text('${S.current.damage} ${_fmt(gain.damage)}  ${_refundStr(gain.attackNp)}'),
+          trailing: Text(
+            '$sign${_fmt(gain.gain)}\n$sign${percent.toStringAsFixed(1)}%',
+            textAlign: TextAlign.end,
+            style: theme.textTheme.bodySmall?.copyWith(color: color),
+          ),
+        ),
+      );
+    }
+    final errors = result.grailErrors;
+    if (errors.isNotEmpty) {
+      children.add(
+        SimpleAccordion(
+          headerBuilder: (context, _) => ListTile(
+            dense: true,
+            title: Text('${errors.length} ${S.current.error}', style: TextStyle(color: theme.colorScheme.error)),
+          ),
+          contentBuilder: (context) => Padding(padding: const EdgeInsets.all(8), child: Text(errors.join('\n\n'))),
+        ),
+      );
+    }
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: Column(mainAxisSize: MainAxisSize.min, children: children),
+    );
+  }
+}
+
 /// Replace the Battle Simulation team with: slot 1 = this attacker (with the calc's CE and settings),
 /// slots 2-6 = the calc's supports. The calc's mystic code replaces the team's only if one is set.
 @visibleForTesting
@@ -1177,6 +1283,7 @@ enum _ParamType {
   bestSupports,
   bestCE,
   bestMC,
+  grailed,
   instantDeath;
 
   String get shownName {
@@ -1193,6 +1300,8 @@ enum _ParamType {
         return 'Best CE';
       case _ParamType.bestMC:
         return 'Best MC';
+      case _ParamType.grailed:
+        return 'If Grailed';
       case _ParamType.instantDeath:
         return S.current.instant_death;
     }

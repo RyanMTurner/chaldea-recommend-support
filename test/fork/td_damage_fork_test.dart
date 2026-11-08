@@ -6,6 +6,7 @@
 //   8. Grand Servant option: Disabled / Current / Max
 //   9. "Battle Sim" button: send attacker + supports + MC to the Battle Simulation team
 //  13. "Player's Append" option: the calc uses each servant's own append levels
+//  23. "If Grailed" tab: damage at Lv.70/80/90/100, only the levels above the servant's
 //
 // Run: flutter test test/fork --dart-define=APP_PATH=/path/to/app/data
 import 'dart:convert';
@@ -211,6 +212,44 @@ void main() async {
       expect(current.mc!.id, 20);
       expect(current.gain, 0);
       expectSortedByDamage(gains.map((e) => e.damage).toList());
+    });
+  });
+
+  group('If Grailed', () {
+    test('only levels above the current one, gains against the current level', () async {
+      final solver = TdDmgSolver();
+      final svt = db.gameData.servantsById[kAltria]!;
+      final data = solver.getSvtData(svt, 4)!..lv = 85;
+      final target = (await solver.calcOneSvt(
+        data,
+        solver.getQuest(),
+        solver.getMysticCodeData(),
+        solver.getDelegate(),
+      ))!;
+      expect(TdDmgSolver.grailLevelsFor(target), [90, 100]);
+
+      await solver.calcGrailLevels(target);
+      final gains = target.grailGains!;
+      expect(target.grailErrors, isEmpty);
+      expect(gains.map((e) => e.lv).toList(), [90, 100]);
+      for (final gain in gains) {
+        expect(gain.gain, gain.damage - target.grailBaseDamage!);
+        expect(gain.gain, greaterThan(0), reason: 'higher level = more ATK');
+      }
+      expect(gains[1].damage, greaterThan(gains[0].damage));
+    });
+
+    test('no levels at Lv.100 or above', () async {
+      final solver = TdDmgSolver();
+      final svt = db.gameData.servantsById[kAltria]!;
+      final data = solver.getSvtData(svt, 4)!..lv = 100;
+      final target = (await solver.calcOneSvt(
+        data,
+        solver.getQuest(),
+        solver.getMysticCodeData(),
+        solver.getDelegate(),
+      ))!;
+      expect(TdDmgSolver.grailLevelsFor(target), isEmpty);
     });
   });
 

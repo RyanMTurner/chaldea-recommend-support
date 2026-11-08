@@ -62,6 +62,11 @@ class TdDmgResult {
   List<TdMcGain>? mcGains;
   List<String> mcErrors = [];
 
+  // "If Grailed" damage at higher servant levels, lazily calculated on demand
+  int? grailBaseDamage;
+  List<TdGrailGain>? grailGains;
+  List<String> grailErrors = [];
+
   TdDmgResult(this.originalSvtData, this.battleData) : svt = originalSvtData.svt!;
 
   bool get hasInstantDeath {
@@ -100,6 +105,16 @@ class TdMcGain {
     required this.gain,
     required this.attackNp,
   });
+}
+
+/// Damage of an attacker when grailed to level [lv], everything else unchanged.
+class TdGrailGain {
+  final int lv;
+  final int damage;
+  final int gain;
+  final int attackNp;
+
+  TdGrailGain({required this.lv, required this.damage, required this.gain, required this.attackNp});
 }
 
 /// Damage of an attacker when equipped with [ce] (null = no CE) at the user's owned level/limit break.
@@ -626,6 +641,65 @@ class TdDmgSolver {
       ..mcBaseLv = options.mcLv
       ..mcGains = gains
       ..mcErrors = mcErrors;
+  }
+
+  /// Levels shown in the "If Grailed" list.
+  static const kGrailLevels = [70, 80, 90, 100];
+
+  /// The [kGrailLevels] above the attacker's current level.
+  static List<int> grailLevelsFor(TdDmgResult target) {
+    final curLv = target.originalSvtData.lv;
+    final maxLv = target.svt.atkGrowth.length;
+    return kGrailLevels.where((lv) => lv > curLv && lv <= maxLv).toList();
+  }
+
+  /// Damage of the attacker of [target] at each of [grailLevelsFor] (only the level changes).
+  /// Gains are relative to a fresh baseline at the current level. Results are stored in [target.grailGains].
+  Future<void> calcGrailLevels(TdDmgResult target) async {
+    if (running.value) return;
+    try {
+      running.value = true;
+      await _calcGrailLevels(target);
+    } catch (e, s) {
+      tryEasyLoading(() => EasyLoading.showError(e.toString()));
+      logger.e('calc grail levels failed', e, s);
+    } finally {
+      running.value = false;
+    }
+  }
+
+  Future<void> _calcGrailLevels(TdDmgResult target) async {
+    final quest = getQuest();
+    final mcData = getMysticCodeData();
+    final delegate = getDelegate();
+
+    final baseline = await calcOneSvt(target.originalSvtData, quest, mcData, delegate);
+    final baseDamage = baseline?.totalDamage ?? target.totalDamage;
+
+    final List<TdGrailGain> gains = [];
+    final List<String> grailErrors = [];
+    for (final lv in grailLevelsFor(target)) {
+      try {
+        final svtData = target.originalSvtData.copy()..lv = lv;
+        final result = await calcOneSvt(svtData, quest, mcData, delegate);
+        if (result == null) continue;
+        gains.add(
+          TdGrailGain(
+            lv: lv,
+            damage: result.totalDamage,
+            gain: result.totalDamage - baseDamage,
+            attackNp: result.attackNp,
+          ),
+        );
+      } catch (e, s) {
+        grailErrors.add('Lv.$lv\nError: $e');
+        logger.e('calc grail lv $lv error', e, s);
+      }
+    }
+    target
+      ..grailBaseDamage = baseDamage
+      ..grailGains = gains
+      ..grailErrors = grailErrors;
   }
 
   final _debuffImmuneSkill = NiceSkill(
