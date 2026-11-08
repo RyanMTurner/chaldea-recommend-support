@@ -132,6 +132,9 @@ class BondSolverResultsTab extends StatelessWidget {
   final String? error;
   final VoidCallback? onCancel;
 
+  /// Called by a result card's "Use this team" button.
+  final ValueChanged<BondSolvedTeam>? onUseTeam;
+
   const BondSolverResultsTab({
     super.key,
     required this.solved,
@@ -141,6 +144,7 @@ class BondSolverResultsTab extends StatelessWidget {
     required this.runState,
     required this.error,
     required this.onCancel,
+    this.onUseTeam,
   });
 
   @override
@@ -364,6 +368,14 @@ class BondSolverResultsTab extends StatelessWidget {
                 },
               ),
               Padding(padding: const EdgeInsets.fromLTRB(8, 0, 8, 4), child: _bondValues(context, team)),
+              if (onUseTeam != null)
+                Align(
+                  alignment: AlignmentDirectional.centerEnd,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
+                    child: TextButton(onPressed: () => onUseTeam!(team), child: const Text('Use this team')),
+                  ),
+                ),
             ],
           ),
         ),

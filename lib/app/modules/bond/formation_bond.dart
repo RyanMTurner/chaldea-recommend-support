@@ -341,6 +341,40 @@ class _FormationBondPageState extends State<FormationBondPage> with SingleTicker
     }
   }
 
+  /// Replaces the Team tab's team with a solver result and switches back to the Team tab.
+  /// The results are kept so other teams can still be tried.
+  void useSolvedTeam(BondSolvedTeam team) {
+    if (!_runtime.restored) return;
+    BattleTeamSetup? result;
+    try {
+      // also clears the Bond 15 / bond-limit flags of slots that get a new servant
+      result = team.applyTo(formation, option);
+    } catch (e) {
+      EasyLoading.showError(e.toString());
+    }
+    if (result == null) return;
+    final applied = result;
+    // New servants get the account's levels/skills/NP (like picking them by hand), at the solver's ascension.
+    final source = option.favoriteSvtOnly ? PreferPlayerSvtDataSource.current : PreferPlayerSvtDataSource.none;
+    for (final slot in team.slots) {
+      if (slot.isSupport || slot.fixedServant || slot.servantId == null) continue;
+      final deck = applied.svts[slot.position];
+      final svt = deck.svt;
+      if (svt == null) continue;
+      deck.onSelectServant(svt, source: source, region: Region.jp);
+      deck.limitCount = slot.limitCount ?? deck.limitCount;
+      deck.updateRankUps(region: Region.jp);
+    }
+    setState(() {
+      formation.svts
+        ..clear()
+        ..addAll(applied.svts);
+    });
+    saveData();
+    if (_runtime.userBacked) db.notifyUserdata();
+    _tabController.animateTo(0);
+  }
+
   void cancelSolve() {
     if (!_runtime.solving) return;
     _runtime.stopSearch();
@@ -684,6 +718,7 @@ class _FormationBondPageState extends State<FormationBondPage> with SingleTicker
                 runState: _runtime.runState,
                 error: _runtime.solverError,
                 onCancel: cancelSolve,
+                onUseTeam: useSolvedTeam,
               ),
             ),
           ),
