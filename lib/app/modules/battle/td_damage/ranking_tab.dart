@@ -69,7 +69,9 @@ class _TdDmgRankingTabState extends State<TdDmgRankingTab> {
                     // isDense: true,
                     value: _sortType,
                     items: [
-                      for (final type in _SortType.values) DropdownMenuItem(value: type, child: Text(type.shownName)),
+                      for (final type in _SortType.values)
+                        if (!(widget.solver.critMode && type == _SortType.npUp))
+                          DropdownMenuItem(value: type, child: Text(type.shownName)),
                     ],
                     onChanged: (v) {
                       setState(() {
@@ -90,6 +92,15 @@ class _TdDmgRankingTabState extends State<TdDmgRankingTab> {
     final filterData = widget.svtFilterData;
     if (!ServantFilterPage.filter(filterData, result.svt)) {
       return false;
+    }
+
+    final critCardType = result.critCardType;
+    if (critCardType != null) {
+      // Crit Damage: the "NP card" filter picks the crit card type (Buster/Arts/Quick)
+      if (filterData.tdCardType.isNotEmpty && !filterData.tdCardType.matchOne(critCardType)) {
+        return false;
+      }
+      return true;
     }
 
     final td = result.actor.playerSvtData?.td;
@@ -202,7 +213,7 @@ class _TdDmgRankingTabState extends State<TdDmgRankingTab> {
     }
     cardIcons.add(
       Text(
-        [' NP$tdLv', if (oc != null) ' OC$oc'].join('\n'),
+        result.critCardType != null ? ' Crit' : [' NP$tdLv', if (oc != null) ' OC$oc'].join('\n'),
         style: Theme.of(context).textTheme.bodySmall,
         textScaler: const TextScaler.linear(0.9),
       ),
@@ -530,6 +541,7 @@ class _BestSupportsViewState extends State<_BestSupportsView> {
         TdEffectFlag.attackEnemyOne => ' ST',
         _ => '',
       };
+      if (widget.solver.critMode) return '${_fmt(result.totalDamage)}\nbest crit';
       return '${_fmt(result.totalDamage)}$type\nif dual core';
     }
 
@@ -586,7 +598,9 @@ class _BestSupportsViewState extends State<_BestSupportsView> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Tooltip(
-                message: 'Own NP damage (from the damage list)',
+                message: widget.solver.critMode
+                    ? 'Own best crit damage (from the damage list)'
+                    : 'Own NP damage (from the damage list)',
                 child: Text(ownNpText(gain.support), textAlign: TextAlign.end, style: theme.textTheme.bodySmall),
               ),
               const SizedBox(width: 16),

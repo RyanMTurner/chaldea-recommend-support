@@ -27,6 +27,10 @@ class TdWorkPayload {
   /// "Propose NP Up": NP levels below 5 raised by 1.
   final bool npUp;
 
+  /// Crit Damage page: [TdDmgSolver.critMode], and the card type of [target]'s result.
+  final bool critMode;
+  final int? critCardType;
+
   const TdWorkPayload({
     required this.options,
     required this.userData,
@@ -34,6 +38,8 @@ class TdWorkPayload {
     this.target,
     this.includeNoCe = false,
     this.npUp = false,
+    this.critMode = false,
+    this.critCardType,
   });
 }
 
@@ -52,14 +58,16 @@ List<List<int>> splitIds(List<int> ids, int parts) {
 
 Future<BattleWorkerPool> _pool(TdDmgSolver solver) => BattleWorkerPool.obtain(kTdWorkerTag, solver.workerCount);
 
-TdWorkPayload _payload(TdDmgSolver solver, List<int> ids, {PlayerSvtData? target, bool includeNoCe = false}) =>
+TdWorkPayload _payload(TdDmgSolver solver, List<int> ids, {TdDmgResult? target, bool includeNoCe = false}) =>
     TdWorkPayload(
       options: solver.options,
       userData: db.userData,
       ids: ids,
-      target: target,
+      target: target?.originalSvtData,
       includeNoCe: includeNoCe,
       npUp: solver.npUp,
+      critMode: solver.critMode,
+      critCardType: target?.critCardType,
     );
 
 void Function(int worker, Object? progress) _progressSum(int parts, int total) {
@@ -77,7 +85,7 @@ void Function(int worker, Object? progress) _progressSum(int parts, int total) {
 Future<Object?> _rankingTask(Object? payload, void Function(Object? progress) report) async {
   final work = payload as TdWorkPayload;
   _applyContext(work);
-  final solver = TdDmgSolver()..npUp = work.npUp;
+  final solver = TdDmgSolver(critMode: work.critMode)..npUp = work.npUp;
   final servants = work.ids.map((id) => db.gameData.servantsById[id]).whereType<Servant>().toList();
   await solver.calculateServants(servants, onProgress: (done, _) => report(done));
   for (final result in solver.results) {
@@ -105,7 +113,10 @@ Future<void> calculateRankingParallel(TdDmgSolver solver, List<Servant> servants
     solver.errors.addAll(errors);
   }
   final order = {for (final (index, id) in ids.indexed) id: index};
-  solver.results.sortByList((e) => [order[e.svt.id] ?? 0]); // same order as on one thread
+  // same order as on one thread (crit mode: Buster, Arts, Quick within a servant)
+  solver.results.sortByList(
+    (e) => [order[e.svt.id] ?? 0, TdDmgSolver.kCritCardTypes.indexOf(e.critCardType ?? -1)],
+  );
 }
 
 // ===== Best Supports =====
@@ -113,8 +124,8 @@ Future<void> calculateRankingParallel(TdDmgSolver solver, List<Servant> servants
 Future<Object?> _supportsTask(Object? payload, void Function(Object? progress) report) async {
   final work = payload as TdWorkPayload;
   _applyContext(work);
-  final solver = TdDmgSolver();
-  final target = TdDmgResult(work.target!, BattleData());
+  final solver = TdDmgSolver(critMode: work.critMode);
+  final target = TdDmgResult(work.target!, BattleData())..critCardType = work.critCardType;
   final candidates = work.ids.map((id) => db.gameData.servantsById[id]).whereType<Servant>().toList();
   await solver.calcBestSupports(target, candidates: candidates, onProgress: (done, _) => report(done));
   return (
@@ -135,7 +146,7 @@ Future<void> calcBestSupportsParallel(TdDmgSolver solver, TdDmgResult target) as
   final pool = await _pool(solver);
   final parts = splitIds(ids, pool.count);
   final outputs = await pool.runAll([
-    for (final part in parts) (_supportsTask, _payload(solver, part, target: target.originalSvtData)),
+    for (final part in parts) (_supportsTask, _payload(solver, part, target: target)),
   ], onProgress: _progressSum(parts.length, ids.length));
 
   int? baseDamage;
@@ -163,8 +174,8 @@ Future<void> calcBestSupportsParallel(TdDmgSolver solver, TdDmgResult target) as
 Future<Object?> _cesTask(Object? payload, void Function(Object? progress) report) async {
   final work = payload as TdWorkPayload;
   _applyContext(work);
-  final solver = TdDmgSolver();
-  final target = TdDmgResult(work.target!, BattleData());
+  final solver = TdDmgSolver(critMode: work.critMode);
+  final target = TdDmgResult(work.target!, BattleData())..critCardType = work.critCardType;
   final candidates = work.ids.map((id) => db.gameData.craftEssencesById[id]).whereType<CraftEssence>().toList();
   await solver.calcBestCEs(
     target,
@@ -189,7 +200,7 @@ Future<void> calcBestCEsParallel(TdDmgSolver solver, TdDmgResult target) async {
   final outputs = await pool.runAll([
     for (final (index, part) in parts.indexed)
       // only the first worker adds the "No CE" row
-      (_cesTask, _payload(solver, part, target: target.originalSvtData, includeNoCe: index == 0)),
+      (_cesTask, _payload(solver, part, target: target, includeNoCe: index == 0)),
   ], onProgress: _progressSum(parts.length, ids.length));
 
   _CeBase? base;

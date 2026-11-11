@@ -35,6 +35,9 @@ class TdDmgResult {
   int attackNp = 0;
   int totalNp = 0;
 
+  /// Crit Damage mode: the card type (Buster/Arts/Quick) of the single critical card used instead of the NP.
+  int? critCardType;
+
   /// "Propose NP Up": damage with the NP level raised by 1 (only below NP5, after [TdDmgSolver.calculateNpUp]).
   int? npUpDamage;
 
@@ -139,6 +142,14 @@ class TdCeGain {
 }
 
 class TdDmgSolver {
+  TdDmgSolver({this.critMode = false});
+
+  /// Crit Damage page: every servant gets a Buster, Arts and Quick result, each attacking with a single
+  /// critical card of that type instead of the NP.
+  final bool critMode;
+
+  static final kCritCardTypes = [CardType.buster.value, CardType.arts.value, CardType.quick.value];
+
   TdDamageOptions get options => db.settings.battleSim.tdDmgOptions;
   List<TdDmgResult> results = [];
   List errors = [];
@@ -302,7 +313,7 @@ class TdDmgSolver {
 
           // tdTypeChanges
           final baseTd = baseSvt?.td;
-          if (baseSvt != null && baseTd != null) {
+          if (!critMode && baseSvt != null && baseTd != null) {
             final tdTypeChangeIds = baseTd.script?.tdTypeChangeIDs ?? const [];
             // tdChangeByBattlePoint_{}_{}
             for (final tdId in tdTypeChangeIds) {
@@ -321,24 +332,28 @@ class TdDmgSolver {
           }
         }
 
-        final Map<int, TdDmgResult> resultRecord = {};
+        // NP mode: keyed by damage. Crit mode: keyed by (card type, damage), so each card type keeps its own entry.
+        final Map<Object, TdDmgResult> resultRecord = {};
         for (final svtData in variants) {
           if (svtData == null) continue;
-          final result = await calcOneSvt(svtData, quest, mcData, delegate);
-          if (result == null) continue;
+          for (final critCard in critMode ? kCritCardTypes : const <int?>[null]) {
+            final result = await calcOneSvt(svtData, quest, mcData, delegate, critCard: critCard);
+            if (result == null) continue;
+            final Object key = critMode ? (critCard, result.totalDamage) : result.totalDamage;
 
-          if (resultRecord.containsKey(result.totalDamage)) {
-            final recorded = resultRecord[result.totalDamage]!;
-            final currentLimitCount = result.actor.limitCount;
-            final recordedLimitCount = recorded.actor.limitCount;
-            if ((currentLimitCount < recordedLimitCount && recordedLimitCount != 4) || currentLimitCount == 4) {
-              resultRecord[result.totalDamage] = result;
-              if (recorded.actor.getNPCard()?.cardType != result.actor.getNPCard()?.cardType) {
-                results.add(recorded);
+            if (resultRecord.containsKey(key)) {
+              final recorded = resultRecord[key]!;
+              final currentLimitCount = result.actor.limitCount;
+              final recordedLimitCount = recorded.actor.limitCount;
+              if ((currentLimitCount < recordedLimitCount && recordedLimitCount != 4) || currentLimitCount == 4) {
+                resultRecord[key] = result;
+                if (!critMode && recorded.actor.getNPCard()?.cardType != result.actor.getNPCard()?.cardType) {
+                  results.add(recorded);
+                }
               }
+            } else {
+              resultRecord[key] = result;
             }
-          } else {
-            resultRecord[result.totalDamage] = result;
           }
         }
         results.addAll(resultRecord.values);
@@ -403,7 +418,7 @@ class TdDmgSolver {
     final delegate = getDelegate();
 
     // re-calc baseline with current options, so that every gain is measured against the same setup
-    final baseline = await calcOneSvt(target.originalSvtData, quest, mcData, delegate);
+    final baseline = await calcOneSvt(target.originalSvtData, quest, mcData, delegate, critCard: target.critCardType);
     final baseDamage = baseline?.totalDamage ?? target.totalDamage;
 
     final servants = (candidates ?? getServantList()).where((e) => e.isUserSvt).toList();
@@ -415,7 +430,14 @@ class TdDmgSolver {
         await Future.delayed(const Duration(milliseconds: 5));
       }
       try {
-        final result = await calcOneSvt(target.originalSvtData, quest, mcData, delegate, extraSupports: [svt.id]);
+        final result = await calcOneSvt(
+          target.originalSvtData,
+          quest,
+          mcData,
+          delegate,
+          extraSupports: [svt.id],
+          critCard: target.critCardType,
+        );
         if (result == null) continue;
         gains.add(
           TdSupportGain(
@@ -483,7 +505,7 @@ class TdDmgSolver {
     final delegate = getDelegate();
 
     final currentCe = db.gameData.craftEssencesById[options.ceId];
-    final baseline = await calcOneSvt(target.originalSvtData, quest, mcData, delegate);
+    final baseline = await calcOneSvt(target.originalSvtData, quest, mcData, delegate, critCard: target.critCardType);
     final baseDamage = baseline?.totalDamage ?? target.totalDamage;
 
     final List<TdCeGain> gains = [];
@@ -491,7 +513,14 @@ class TdDmgSolver {
 
     // with a CE selected, also show what removing it would do
     if (currentCe != null && includeNoCe) {
-      final result = await calcOneSvt(target.originalSvtData, quest, mcData, delegate, equip1: SvtEquipData());
+      final result = await calcOneSvt(
+        target.originalSvtData,
+        quest,
+        mcData,
+        delegate,
+        equip1: SvtEquipData(),
+        critCard: target.critCardType,
+      );
       if (result != null) {
         gains.add(
           TdCeGain(
@@ -524,6 +553,7 @@ class TdDmgSolver {
           mcData,
           delegate,
           equip1: SvtEquipData(ce: ce, lv: lv, limitBreak: limitBreak),
+          critCard: target.critCardType,
         );
         if (result == null) continue;
         gains.add(
@@ -576,7 +606,13 @@ class TdDmgSolver {
     final delegate = getDelegate();
 
     final currentMc = db.gameData.mysticCodes[options.mcId];
-    final baseline = await calcOneSvt(target.originalSvtData, quest, getMysticCodeData(), delegate);
+    final baseline = await calcOneSvt(
+      target.originalSvtData,
+      quest,
+      getMysticCodeData(),
+      delegate,
+      critCard: target.critCardType,
+    );
     final baseDamage = baseline?.totalDamage ?? target.totalDamage;
 
     final List<TdMcGain> gains = [];
@@ -584,7 +620,13 @@ class TdDmgSolver {
 
     // with an MC selected, also show what removing it would do
     if (currentMc != null) {
-      final result = await calcOneSvt(target.originalSvtData, quest, MysticCodeData()..mysticCode = null, delegate);
+      final result = await calcOneSvt(
+        target.originalSvtData,
+        quest,
+        MysticCodeData()..mysticCode = null,
+        delegate,
+        critCard: target.critCardType,
+      );
       if (result != null) {
         gains.add(
           TdMcGain(
@@ -617,7 +659,7 @@ class TdDmgSolver {
         final mcData = MysticCodeData()
           ..mysticCode = mc
           ..level = lv;
-        final result = await calcOneSvt(target.originalSvtData, quest, mcData, delegate);
+        final result = await calcOneSvt(target.originalSvtData, quest, mcData, delegate, critCard: target.critCardType);
         if (result == null) continue;
         gains.add(
           TdMcGain(
@@ -673,7 +715,7 @@ class TdDmgSolver {
     final mcData = getMysticCodeData();
     final delegate = getDelegate();
 
-    final baseline = await calcOneSvt(target.originalSvtData, quest, mcData, delegate);
+    final baseline = await calcOneSvt(target.originalSvtData, quest, mcData, delegate, critCard: target.critCardType);
     final baseDamage = baseline?.totalDamage ?? target.totalDamage;
 
     final List<TdGrailGain> gains = [];
@@ -681,7 +723,7 @@ class TdDmgSolver {
     for (final lv in grailLevelsFor(target)) {
       try {
         final svtData = target.originalSvtData.copy()..lv = lv;
-        final result = await calcOneSvt(svtData, quest, mcData, delegate);
+        final result = await calcOneSvt(svtData, quest, mcData, delegate, critCard: target.critCardType);
         if (result == null) continue;
         gains.add(
           TdGrailGain(
@@ -729,9 +771,12 @@ class TdDmgSolver {
     BattleDelegate delegate, {
     List<int> extraSupports = const [],
     SvtEquipData? equip1, // override the CE from options
+    int? critCard, // crit mode: card type of the critical card to attack with (default Buster)
   }) async {
     final battleData = BattleData();
     final data = TdDmgResult(svtData, battleData);
+    final critCardType = critMode ? (critCard ?? CardType.buster.value) : null;
+    data.critCardType = critCardType;
     final attacker = data.originalSvtData.copy();
     if (equip1 != null) attacker.equip1 = equip1;
     battleData.delegate = delegate;
@@ -739,7 +784,8 @@ class TdDmgSolver {
       ..random = options.random
       ..threshold = options.probabilityThreshold;
     final svt = attacker.svt!;
-    if (attacker.td == null) {
+    // crit mode attacks with a command card, so servants without an NP are included too
+    if (attacker.td == null && critCardType == null) {
       return null;
     }
 
@@ -756,7 +802,7 @@ class TdDmgSolver {
     battleData.criticalStars = BattleData.kValidStarMax.toDouble();
     actor.np = ConstData.constants.fullTdPoint;
 
-    if (svt.id == 2501400) {
+    if (svt.id == 2501400 && critCardType == null) {
       // Aoko
       if (options.enableActiveSkills) {
         await battleData.activateSvtSkill(0, 2);
@@ -821,9 +867,16 @@ class TdDmgSolver {
 
     actor.np = ConstData.constants.fullTdPoint;
 
-    final card = actor.getNPCard();
+    final CommandCardData? card;
+    if (critCardType != null) {
+      // a single critical command card of the requested type, in place of the NP
+      card = actor.getCards().firstWhereOrNull((e) => CardType.matches(e.cardType, critCardType));
+      card?.critical = true;
+    } else {
+      card = actor.getNPCard();
+    }
     if (card == null) {
-      print('svt ${svt.collectionNo}-${svt.lName.l}: No NP card');
+      print('svt ${svt.collectionNo}-${svt.lName.l}: No ${critCardType == null ? 'NP' : 'card $critCardType'}');
       return null;
     }
     await battleData.playerTurn([CombatAction(actor, card)]);

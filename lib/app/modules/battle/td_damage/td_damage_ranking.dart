@@ -16,17 +16,22 @@ import 'td_workers.dart';
 
 class TdDamageRanking extends StatefulWidget {
   final QuestEnemy? enemy;
-  const TdDamageRanking({super.key, this.enemy});
+
+  /// Crit Damage page: same as NP Damage, but every servant has a Buster, Arts and Quick entry,
+  /// each attacking with a single critical card of that type instead of the NP.
+  final bool critMode;
+  const TdDamageRanking({super.key, this.enemy, this.critMode = false});
 
   @override
   State<TdDamageRanking> createState() => _TdDamageRankingState();
 
   static TdDmgSolver solver = TdDmgSolver();
+  static TdDmgSolver critSolver = TdDmgSolver(critMode: true);
 }
 
 class _TdDamageRankingState extends State<TdDamageRanking> with SingleTickerProviderStateMixin {
   late final TabController _tabController;
-  final solver = TdDamageRanking.solver;
+  late final solver = widget.critMode ? TdDamageRanking.critSolver : TdDamageRanking.solver;
   final svtFilterData = SvtFilterData();
 
   @override
@@ -62,14 +67,17 @@ class _TdDamageRankingState extends State<TdDamageRanking> with SingleTickerProv
                 });
               }
             },
-            onProposeNpUp: () async {
-              await solver.calculateNpUp();
-              if (mounted) {
-                setState(() {
-                  _tabController.index = 1;
-                });
-              }
-            },
+            // NP level doesn't change card damage
+            onProposeNpUp: widget.critMode
+                ? null
+                : () async {
+                    await solver.calculateNpUp();
+                    if (mounted) {
+                      setState(() {
+                        _tabController.index = 1;
+                      });
+                    }
+                  },
           ),
           TdDmgRankingTab(
             solver: solver,
@@ -92,9 +100,9 @@ class _TdDamageRankingState extends State<TdDamageRanking> with SingleTickerProv
         }
         return Scaffold(
           appBar: AppBar(
-            title: Text(S.current.np_damage),
+            title: Text(widget.critMode ? 'Crit Damage' : S.current.np_damage),
             actions: [
-              ChaldeaUrl.docsHelpBtn('np_dmg_ranking', dir: 'laplace/'),
+              if (!widget.critMode) ChaldeaUrl.docsHelpBtn('np_dmg_ranking', dir: 'laplace/'),
               IconButton(
                 icon: const Icon(Icons.filter_alt),
                 tooltip: S.current.filter,

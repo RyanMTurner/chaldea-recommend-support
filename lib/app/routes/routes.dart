@@ -218,6 +218,7 @@ class Routes {
   static const String laplaceBattle = '/laplace/battle';
   static const String laplaceShare = '/laplace/share';
   static const String laplaceNpDmg = '/laplace/np-dmg';
+  static const String laplaceCritDmg = '/laplace/crit-dmg';
   static const String laplaceManageTeam = '/laplace/my-teams';
 
   static const String discord = '/discord';
@@ -498,6 +499,8 @@ class RouteConfiguration {
           return SimulationPreview(shareUri: uri);
         } else if (path?.startsWith(Routes.laplaceNpDmg) == true) {
           return const TdDamageRanking();
+        } else if (path?.startsWith(Routes.laplaceCritDmg) == true) {
+          return const TdDamageRanking(critMode: true);
         } else if (path?.startsWith(Routes.laplaceManageTeam) == true) {
           return const TeamsQueryPage(mode: TeamQueryMode.user);
         }

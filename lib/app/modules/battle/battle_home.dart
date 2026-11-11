@@ -69,6 +69,13 @@ class BattleHomePage extends StatelessWidget {
                 router.push(url: Routes.laplaceNpDmg);
               },
             ),
+            ListTile(
+              leading: const Icon(Icons.flash_on),
+              title: const Text('Crit Damage'),
+              onTap: () {
+                router.push(url: Routes.laplaceCritDmg);
+              },
+            ),
           ],
         ),
         TileGroup(
