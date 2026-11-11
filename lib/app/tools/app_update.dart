@@ -53,6 +53,10 @@ class AppUpdater {
     if (network.unavailable) return;
     final detail = await check();
     if (detail == null) return;
+    // never pop up automatically unless the release is newer than this app (the debug same-version
+    // upgrade is still reachable manually from About > Check update)
+    final releaseVersion = detail.release.version;
+    if (releaseVersion == null || releaseVersion <= AppInfo.version) return;
     if (DateTime.now().difference(detail.release.publishedAt).inHours < 2) {
       return;
     }
