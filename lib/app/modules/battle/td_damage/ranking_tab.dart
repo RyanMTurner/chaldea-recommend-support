@@ -1,8 +1,16 @@
+import 'dart:io';
 import 'dart:math';
+import 'dart:ui' as ui;
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/rendering.dart';
 
 import 'package:flutter_easyloading/flutter_easyloading.dart';
+import 'package:image/image.dart' as img_lib;
+import 'package:pasteboard/pasteboard.dart';
 
 import 'package:chaldea/app/app.dart';
+import 'package:chaldea/app/tools/icon_cache_manager.dart';
 import 'package:chaldea/app/battle/models/battle.dart';
 import 'package:chaldea/app/battle/utils/battle_logger.dart';
 import 'package:chaldea/app/modules/common/filter_page_base.dart';
@@ -10,7 +18,10 @@ import 'package:chaldea/app/modules/common/filter_group.dart';
 import 'package:chaldea/app/modules/common/misc.dart';
 import 'package:chaldea/generated/l10n.dart';
 import 'package:chaldea/models/models.dart';
+import 'package:chaldea/packages/logger.dart';
+import 'package:chaldea/packages/platform/platform.dart';
 import 'package:chaldea/utils/utils.dart';
+import 'package:chaldea/widgets/image/image_actions.dart';
 import 'package:chaldea/widgets/widgets.dart';
 
 import '../../craft_essence/filter.dart';
@@ -458,6 +469,129 @@ class _BestSupportsViewState extends State<_BestSupportsView> {
   static const _kCollapsedCount = 20;
   bool _showAll = false;
   bool _calculating = false;
+  bool _copying = false;
+
+  /// Rows rendered into one image piece (keeps each GPU texture small).
+  static const _kImageChunkRows = 40;
+
+  /// Load every support icon into the image cache, so off-screen rows paint their icon right away.
+  Future<void> _precacheIcons(List<Servant> servants) async {
+    if (kIsWeb) return;
+    final loader = AtlasIconLoader.i;
+    await Future.wait(
+      servants.map((svt) async {
+        final url = svt.borderedIcon;
+        if (url == null || !loader.shouldCacheImage(url)) return;
+        try {
+          final fp = loader.getCached(url) ?? await loader.get(url);
+          if (fp != null && mounted) await precacheImage(FileImage(File(fp)), context);
+        } catch (e) {
+          // a missing icon shouldn't stop the copy
+        }
+      }),
+    );
+  }
+
+  /// Render every row of [gains] (not just the shown ones) off screen, stack them into one image and copy it.
+  Future<void> _copyAsImage(List<TdSupportGain> gains, Widget Function(int index, TdSupportGain gain) buildRow) async {
+    if (_copying || gains.isEmpty) return;
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return;
+    setState(() => _copying = true);
+    OverlayEntry? entry;
+    try {
+      EasyLoading.show(status: 'Rendering...', maskType: EasyLoadingMaskType.clear);
+      await _precacheIcons(gains.map((e) => e.support).toList());
+      if (!mounted) return;
+
+      final theme = Theme.of(context);
+      final background = theme.cardTheme.color ?? theme.colorScheme.surfaceContainerLow;
+      final width = box.size.width;
+      final screenWidth = MediaQuery.sizeOf(context).width;
+      final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
+      final overlay = Overlay.of(context, rootOverlay: true);
+      final themes = InheritedTheme.capture(from: context, to: overlay.context);
+
+      final keys = <GlobalKey>[];
+      final pieces = <Widget>[];
+      for (int start = 0; start < gains.length; start += _kImageChunkRows) {
+        final key = GlobalKey();
+        keys.add(key);
+        pieces.add(
+          RepaintBoundary(
+            key: key,
+            child: Material(
+              color: background,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (int index = start; index < min(gains.length, start + _kImageChunkRows); index++)
+                    buildRow(index, gains[index]),
+                ],
+              ),
+            ),
+          ),
+        );
+      }
+      // laid out and painted to the right of the screen, so it's never visible
+      entry = OverlayEntry(
+        builder: (context) => Positioned(
+          left: screenWidth + 100,
+          top: 0,
+          width: width,
+          child: IgnorePointer(
+            child: ExcludeSemantics(
+              child: themes.wrap(Column(mainAxisSize: MainAxisSize.min, children: pieces)),
+            ),
+          ),
+        ),
+      );
+      overlay.insert(entry);
+      await WidgetsBinding.instance.endOfFrame;
+      // icons not in the cache yet load and fade in
+      await Future.delayed(const Duration(milliseconds: 600));
+      await WidgetsBinding.instance.endOfFrame;
+
+      final boundaries = [
+        for (final key in keys)
+          if (key.currentContext?.findRenderObject() case final RenderRepaintBoundary boundary) boundary,
+      ];
+      if (boundaries.length != keys.length) throw StateError('Failed to render the list');
+      final totalHeight = boundaries.fold<double>(0, (sum, e) => sum + e.size.height);
+      // keep very long lists within a reasonable image size
+      final pixelRatio = min(devicePixelRatio, 60000 / max(1.0, totalHeight));
+
+      final List<(int, int, Uint8List)> parts = [];
+      for (final boundary in boundaries) {
+        final image = await boundary.toImage(pixelRatio: pixelRatio);
+        final data = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+        parts.add((image.width, image.height, data!.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes)));
+        image.dispose();
+      }
+      entry.remove();
+      entry = null;
+
+      final png = await compute(_stackImagesToPng, parts);
+      if (PlatformU.supportCopyImage) {
+        await Pasteboard.writeImage(png);
+        EasyLoading.showSuccess(S.current.copied);
+      } else {
+        EasyLoading.dismiss();
+        if (!mounted) return;
+        final t = DateTime.now();
+        final fn = 'best_supports_${widget.result.svt.collectionNo}_'
+            '${[t.month, t.day, t.hour, t.minute, t.second].map((e) => e.toString().padLeft(2, '0')).join('_')}.png';
+        ImageActions.showSaveShare(context: context, data: png, destFp: joinPaths(db.paths.downloadDir, fn));
+      }
+    } catch (e, s) {
+      EasyLoading.showError(e.toString());
+      logger.e('copy best supports image failed', e, s);
+    } finally {
+      entry?.remove();
+      if (mounted) setState(() => _copying = false);
+    }
+  }
 
   @override
   void initState() {
@@ -575,68 +709,83 @@ class _BestSupportsViewState extends State<_BestSupportsView> {
         ),
       );
     }
-    for (final (index, gain) in shown.indexed) {
+    Widget buildRow(int index, TdSupportGain gain) {
       final percent = baseDamage > 0 ? gain.gain / baseDamage * 100 : 0.0;
-      children.add(
-        ListTile(
-          dense: true,
-          contentPadding: const EdgeInsetsDirectional.only(start: 12, end: 12),
-          leading: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                '${(index + 1).toString().padRight(2)} ',
-                style: kMonoStyle,
-                textScaler: const TextScaler.linear(0.8),
-              ),
-              gain.support.iconBuilder(context: context, width: 32),
-            ],
-          ),
-          title: Text(gain.support.lName.l, maxLines: 1, overflow: TextOverflow.ellipsis),
-          subtitle: Text('${S.current.damage} ${_fmt(gain.damage)}  ${_refundStr(gain.attackNp)}'),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Tooltip(
-                message: widget.solver.critMode
-                    ? 'Own best crit damage (from the damage list)'
-                    : 'Own NP damage (from the damage list)',
-                child: Text(ownNpText(gain.support), textAlign: TextAlign.end, style: theme.textTheme.bodySmall),
-              ),
-              const SizedBox(width: 16),
-              Text(
-                '+${_fmt(gain.gain)}\n+${percent.toStringAsFixed(1)}%',
-                textAlign: TextAlign.end,
-                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.primary),
-              ),
-              Builder(
-                builder: (context) {
-                  final supports = widget.solver.options.supports;
-                  final count = supports.where((id) => id == gain.support.id).length;
-                  final full = supports.length >= _kMaxSupports;
-                  return IconButton(
-                    tooltip: full
-                        ? 'Max $_kMaxSupports supports'
-                        : count > 0
-                        ? 'Already added ($count). Add another'
-                        : 'Add as support',
-                    onPressed: full ? null : () => _addSupport(gain.support),
-                    icon: Icon(count > 0 ? Icons.add_circle : Icons.add_circle_outline),
-                    color: theme.colorScheme.primary,
-                    visualDensity: VisualDensity.compact,
-                  );
-                },
-              ),
-            ],
-          ),
+      return ListTile(
+        dense: true,
+        contentPadding: const EdgeInsetsDirectional.only(start: 12, end: 12),
+        leading: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '${(index + 1).toString().padRight(2)} ',
+              style: kMonoStyle,
+              textScaler: const TextScaler.linear(0.8),
+            ),
+            gain.support.iconBuilder(context: context, width: 32),
+          ],
+        ),
+        title: Text(gain.support.lName.l, maxLines: 1, overflow: TextOverflow.ellipsis),
+        subtitle: Text('${S.current.damage} ${_fmt(gain.damage)}  ${_refundStr(gain.attackNp)}'),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Tooltip(
+              message: widget.solver.critMode
+                  ? 'Own best crit damage (from the damage list)'
+                  : 'Own NP damage (from the damage list)',
+              child: Text(ownNpText(gain.support), textAlign: TextAlign.end, style: theme.textTheme.bodySmall),
+            ),
+            const SizedBox(width: 16),
+            Text(
+              '+${_fmt(gain.gain)}\n+${percent.toStringAsFixed(1)}%',
+              textAlign: TextAlign.end,
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.primary),
+            ),
+            Builder(
+              builder: (context) {
+                final supports = widget.solver.options.supports;
+                final count = supports.where((id) => id == gain.support.id).length;
+                final full = supports.length >= _kMaxSupports;
+                return IconButton(
+                  tooltip: full
+                      ? 'Max $_kMaxSupports supports'
+                      : count > 0
+                      ? 'Already added ($count). Add another'
+                      : 'Add as support',
+                  onPressed: full ? null : () => _addSupport(gain.support),
+                  icon: Icon(count > 0 ? Icons.add_circle : Icons.add_circle_outline),
+                  color: theme.colorScheme.primary,
+                  visualDensity: VisualDensity.compact,
+                );
+              },
+            ),
+          ],
         ),
       );
     }
-    if (positive.length > _kCollapsedCount) {
+
+    for (final (index, gain) in shown.indexed) {
+      children.add(buildRow(index, gain));
+    }
+    if (positive.isNotEmpty) {
       children.add(
-        TextButton(
-          onPressed: () => setState(() => _showAll = !_showAll),
-          child: Text(_showAll ? 'Show top $_kCollapsedCount' : 'Show all (${positive.length})'),
+        Wrap(
+          alignment: WrapAlignment.center,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 8,
+          children: [
+            if (positive.length > _kCollapsedCount)
+              TextButton(
+                onPressed: () => setState(() => _showAll = !_showAll),
+                child: Text(_showAll ? 'Show top $_kCollapsedCount' : 'Show all (${positive.length})'),
+              ),
+            TextButton.icon(
+              onPressed: _copying ? null : () => _copyAsImage(positive, buildRow),
+              icon: const Icon(Icons.copy, size: 18),
+              label: const Text('Copy to clipboard'),
+            ),
+          ],
         ),
       );
     }
@@ -1320,6 +1469,29 @@ enum _ParamType {
         return S.current.instant_death;
     }
   }
+}
+
+/// Stack RGBA image pieces (width, height, pixels) vertically into one PNG. Narrower pieces are left-aligned.
+Uint8List _stackImagesToPng(List<(int, int, Uint8List)> parts) {
+  final width = parts.map((e) => e.$1).reduce(max);
+  final height = parts.fold<int>(0, (sum, e) => sum + e.$2);
+  final pixels = Uint8List(width * height * 4);
+  int top = 0;
+  for (final (w, h, bytes) in parts) {
+    for (int y = 0; y < h; y++) {
+      final dst = ((top + y) * width) * 4;
+      pixels.setRange(dst, dst + w * 4, bytes, y * w * 4);
+    }
+    top += h;
+  }
+  final image = img_lib.Image.fromBytes(
+    width: width,
+    height: height,
+    bytes: pixels.buffer,
+    numChannels: 4,
+    order: img_lib.ChannelOrder.rgba,
+  );
+  return img_lib.encodePng(image, level: 3);
 }
 
 /// Same format as the result header: "Refund 7.98"
