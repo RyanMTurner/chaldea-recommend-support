@@ -393,12 +393,27 @@ class SvtFilterData with FilterDataMixin {
           final aa = user.svtStatusOf(a.collectionNo).bond, bb = user.svtStatusOf(b.collectionNo).bond;
           r = aa - bb;
           break;
+        case SvtCompare.level:
+          r = _levelSortValue(aa, user) - _levelSortValue(bb, user);
+          break;
       }
       if (r != 0) {
         return (reversed?.getOrNull(i) ?? key.defaultReversed) ? -r : r;
       }
     }
     return 0;
+  }
+
+  /// owned > not owned, then owned servants by their level cap (from ascension and grails)
+  static int _levelSortValue(Servant? svt, User user) {
+    if (svt == null) return 0;
+    final status = user.svtStatusOf(svt.collectionNo);
+    if (!status.favorite) return 0;
+    final cur = status.cur;
+    final lv = cur.grail > 0
+        ? svt.grailedLv(cur.grail)
+        : (svt.ascensionAdd.lvMax.ascension[cur.ascension] ?? svt.lvMax);
+    return 1000 + lv;
   }
 }
 
@@ -978,7 +993,8 @@ enum SvtCompare {
   hp(true),
   priority(true),
   tdLv(true),
-  bondLv(true);
+  bondLv(true),
+  level(true);
 
   const SvtCompare(this.defaultReversed);
   final bool defaultReversed;
@@ -996,6 +1012,7 @@ enum SvtCompare {
       SvtCompare.priority => S.current.priority,
       SvtCompare.tdLv => '${S.current.np_short} Lv',
       SvtCompare.bondLv => '${S.current.bond} Lv',
+      SvtCompare.level => S.current.level,
     };
   }
 
