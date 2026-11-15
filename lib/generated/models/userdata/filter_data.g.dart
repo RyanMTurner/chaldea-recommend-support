@@ -146,6 +146,7 @@ const _$CraftCompareEnumMap = {
   CraftCompare.rarity: 'rarity',
   CraftCompare.atk: 'atk',
   CraftCompare.hp: 'hp',
+  CraftCompare.level: 'level',
 };
 
 CmdCodeFilterData _$CmdCodeFilterDataFromJson(Map json) => $checkedCreate('CmdCodeFilterData', json, ($checkedConvert) {

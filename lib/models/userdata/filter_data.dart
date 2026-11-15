@@ -408,7 +408,8 @@ enum CraftCompare {
   collectionNo(true),
   rarity(true),
   atk(true),
-  hp(true);
+  hp(true),
+  level(true);
 
   const CraftCompare(this.defaultReversed);
   final bool defaultReversed;
@@ -420,6 +421,7 @@ enum CraftCompare {
     CraftCompare.rarity => S.current.filter_sort_rarity,
     CraftCompare.atk => 'ATK',
     CraftCompare.hp => 'HP',
+    CraftCompare.level => S.current.level,
   };
 }
 
@@ -514,12 +516,19 @@ class CraftFilterData with FilterDataMixin {
         CraftCompare.rarity => a.rarity - b.rarity,
         CraftCompare.atk => a.atkMax - b.atkMax,
         CraftCompare.hp => a.hpMax - b.hpMax,
+        CraftCompare.level => _levelSortValue(a) - _levelSortValue(b),
       };
       if (r != 0) {
         return (reversed?.getOrNull(index) ?? key.defaultReversed) ? -r : r;
       }
     }
     return 0;
+  }
+
+  /// owned > met > not met, then owned CEs by their level
+  static int _levelSortValue(CraftEssence ce) {
+    final status = ce.status;
+    return status.status * 1000 + (status.status == CraftStatus.owned ? status.lv : 0);
   }
 }
 
